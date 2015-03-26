@@ -78,26 +78,25 @@ static __thread int spec_lock_recursive = 0;
 // test-and-set lock
 //
 struct _tas_lock_t {
-    volatile int16_t val;
-    volatile int16_t count;
+    volatile int32_t val;
+    volatile int32_t count;
 } __attribute__((__packed__));
 
 typedef struct _tas_lock_t tas_lock_t;
 
 static int tas_alloc(tas_lock_t **l) {
-    *l = (tas_lock_t*)malloc(64);
+    *l = (tas_lock_t*)malloc(128);
     (*l)->val = 0;
     (*l)->count = 0;
     return 0;
 };
 
-static inline int tatas(volatile int16_t* val, int16_t v) {
+static inline int tatas(volatile int32_t* val, int32_t v) {
     return *val || __sync_lock_test_and_set(val, v); 
 }
 
 static int tas_lock(tas_lock_t *l) {
     if (tatas(&l->val, 1)) {
-        //__sync_fetch_and_add(&l->count, 1);
         int s = spin_begin();
         do {
             s = spin_wait(s); 
@@ -114,10 +113,12 @@ static int tas_unlock(tas_lock_t *l) {
 static int tas_lock_tm(tas_lock_t *l) {
     if (spec_lock == 0) { // not in HTM
         if (tatas(&l->val, 1)) {
+            //int order = __sync_fetch_and_add(&l->count, 1);
             int s = spin_begin();
                 spec_lock = l;
                 if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
-                    spec_lock_recursive = l->val;
+              //      if (order==0)
+              //          spec_lock_recursive = l->val;
                     return 0;
                 }
                 spec_lock = 0;
@@ -125,6 +126,8 @@ static int tas_lock_tm(tas_lock_t *l) {
 
             while (tatas(&l->val, 1))
                 s = spin_wait(s); 
+
+            //__sync_fetch_and_sub(&l->count, 1);
         }
     } else if (spec_lock == l) {
         spec_lock_recursive++;
@@ -144,6 +147,67 @@ static int tas_unlock_tm(tas_lock_t *l) {
     return 0;
 }
 
+struct _ticket_lock_t {
+    volatile uint32_t next;
+    volatile uint32_t now;
+} __attribute__((__packed__));
+
+typedef struct _ticket_lock_t ticket_lock_t;
+
+static int ticket_lock(ticket_lock_t *l) {
+    uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
+    while (my_ticket != l->now) {
+        uint32_t dist = my_ticket - l->now;
+        spin_wait(32*dist); 
+    }
+    return 0;
+}
+
+static int ticket_unlock(ticket_lock_t *l) {
+    l->now++;
+    return 0;
+}
+
+static int ticket_lock_tm(ticket_lock_t *l) {
+    uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
+    while (my_ticket != l->now) {
+        uint32_t dist = my_ticket - l->now;
+        if (dist < 3) {
+            spec_lock = l;
+            if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+                if (dist==1)
+                    dist = my_ticket - l->now;
+                return 0;
+            }
+            spec_lock = 0;
+        } else
+            spin_wait(16*dist); 
+    }
+    return 0;
+}
+
+static int ticket_unlock_tm(ticket_lock_t *l) {
+    if (spec_lock) { // in htm
+       //if (spec_lock == l) {
+       //    if (--spec_lock_recursive==0)
+        HTM_ABORT(7);
+       //}
+    } else { // not in HTM
+        l->now++;
+    }
+    return 0;
+}
+
+
+static int ticket_alloc(ticket_lock_t **l) {
+    *l = (ticket_lock_t*)malloc(128);
+    (*l)->next = 0;
+    (*l)->now = 0;
+    return 0;
+};
+
+
+
 struct _lock_type_t {
     const char *name;
     int lock_size;
@@ -155,10 +219,12 @@ struct _lock_type_t {
 typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
-    {"pthread", sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL}, 
-    {"pthread_tm", sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL}, 
-    {"tas",     sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_unlock}, 
-    {"tas_tm",  sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_unlock_tm}, 
+    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL}, 
+    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL}, 
+    {"tas",         sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_unlock}, 
+    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_unlock_tm}, 
+    {"ticket",      sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock, (txlock_func_t)ticket_unlock}, 
+    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_unlock_tm}, 
 };
 
 static lock_type_t *using_lock_type = &lock_types[0];
