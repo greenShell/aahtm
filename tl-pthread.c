@@ -1,0 +1,14 @@
+#include "txlock.h"
+
+int pthread_mutex_lock(void *mutex) {
+    return tl_pthread_mutex_lock(mutex);
+}
+
+int pthread_mutex_unlock(void *mutex) {
+    return tl_pthread_mutex_unlock(mutex);
+}
+
+__attribute__((constructor(200))) 
+static void init_tl_pthread() {
+    tl_replace_libpthread(1);
+}
