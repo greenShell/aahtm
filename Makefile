@@ -1,8 +1,10 @@
+include config.mk
+
 LIBSYNC_PATH=/u/lxiang/projects/libsync
 LIBHTM_PATH=/u/lxiang/projects/libhtm
-CFLAGS= -g -std=c11 -O3 -mrtm -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH)
+CFLAGS = -g -std=c11 -O2 -mrtm $(LIBTXLOCK_CFLAGS) -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH)
 
-all: libtxlock.so libtxlock.a tl-pthread.so
+all: libtxlock.a tl-pthread.so test libtxlock.so
 
 libtxlock.so: txlock.so
 	gcc -shared txlock.so -ldl -o $@
@@ -19,6 +21,9 @@ txlock.so: txlock.c txlock.h
 
 txlock.o: txlock.c txlock.h	
 	gcc $(CFLAGS) -c -flto txlock.c -o txlock.o
+
+test: test.c
+	gcc $(CFLAGS) $(LIBTXLOCK_CFLAGS) test.c $(LIBTXLOCK_LDFLAGS) -o $@
 
 clean:
 	$(RM) *.o *.so *.a
