@@ -223,7 +223,7 @@ static int tas_lock_tm(tas_lock_t *l) {
             //__sync_fetch_and_sub(&l->count, 1);
         }
     } else if (spec_lock == l) {
-        spec_lock_recursive++;
+        //spec_lock_recursive++;
     }
     return 0;
 }
@@ -232,17 +232,17 @@ static int tas_trylock_tm(tas_lock_t *l) {
     if (spec_lock == 0) { // not in HTM
         return tatas(&l->val, 1);
     } else if (spec_lock == l) {
-        spec_lock_recursive++;
+        //spec_lock_recursive++;
     }
     return 0;
 }
 
 static int tas_unlock_tm(tas_lock_t *l) {
     if (spec_lock) { // in htm
-       if (spec_lock == l) {
-           if (--spec_lock_recursive==0)
-                HTM_ABORT(7);
-       }
+    //   if (spec_lock == l) {
+    //       if (--spec_lock_recursive==0)
+    //            HTM_ABORT(7);
+    //   }
     } else { // not in HTM
         __sync_lock_release(&l->val);
     }
@@ -303,12 +303,20 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     return 0;
 }
 
+static int ticket_trylock_tm(ticket_lock_t *l) {
+    if (spec_lock) { // in htm
+        // nothing
+    } else { // not in HTM
+        ticket_trylock(l);
+    }
+    return 0;
+}
+
 static int ticket_unlock_tm(ticket_lock_t *l) {
     if (spec_lock) { // in htm
-       if (spec_lock == l) {
-       //    if (--spec_lock_recursive==0)
-        HTM_ABORT(7);
-       }
+       //if (spec_lock == l) {
+       // HTM_ABORT(7);
+       //}
     } else { // not in HTM
         l->now++;
     }
@@ -340,10 +348,10 @@ static lock_type_t lock_types[] = {
     {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
     {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
     {"tas",         sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock}, 
-    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_tm}, 
+    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm}, 
 //    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
     {"ticket",      sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock}, 
-    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock_tm}, 
+    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm}, 
 };
 
 static lock_type_t *using_lock_type = &lock_types[0];
