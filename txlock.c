@@ -10,7 +10,7 @@
 #if defined(__powerpc__) || defined(__powerpc64__)
 static const char* LIBPTHREAD_PATH = "/lib/powerpc64le-linux-gnu/libpthread.so.0";
 #else
-static const char* LIBPTHREAD_PATH = "/lib64/libpthread.so.0";
+static const char* LIBPTHREAD_PATH = "libpthread.so.0"; // without specifying the path dlopen will search for the library on LIB_PATH
 #endif
 static void *libpthread_handle = 0;
 
@@ -416,3 +416,29 @@ static void uninit_lib_txlock() {
     if (libpthread_handle)
         dlclose(libpthread_handle);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

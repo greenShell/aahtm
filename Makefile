@@ -1,7 +1,7 @@
 include config.mk
 
-LIBSYNC_PATH=/u/lxiang/projects/libsync
-LIBHTM_PATH=/u/lxiang/projects/libhtm
+LIBSYNC_PATH=../libsync
+LIBHTM_PATH=../libhtm
 CFLAGS = -g -std=c11 -O2 -mrtm $(LIBTXLOCK_CFLAGS) -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH)
 
 all: libtxlock.a tl-pthread.so test libtxlock.so
