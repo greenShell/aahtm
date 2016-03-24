@@ -2,7 +2,7 @@ include config.mk
 
 LIBSYNC_PATH=../libsync
 LIBHTM_PATH=../libhtm
-CFLAGS = -g -std=c11 -O2 -mrtm $(LIBTXLOCK_CFLAGS) -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH) -D_POSIX_C_SOURCE=200112L
+CFLAGS = -g -std=c11 -O0 -mrtm $(LIBTXLOCK_CFLAGS) -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH) -D_POSIX_C_SOURCE=200112L
 
 all: libtxlock.a tl-pthread.so test libtxlock.so
 
@@ -10,7 +10,7 @@ libtxlock.so: txlock.so
 	gcc -shared txlock.so -ldl -o $@
 
 libtxlock.a: txlock.o
-	ar rcs $@ txlock.o
+	gcc-ar rcs $@ txlock.o
 
 tl-pthread.so: tl-pthread.c txlock.so
 	gcc $(CFLAGS) -fPIC -flto -c tl-pthread.c -o tl-pthread.o

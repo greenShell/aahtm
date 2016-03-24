@@ -477,30 +477,38 @@ struct _txcond_t {
 
 typedef struct _txcond_t txcond_t;
 
-static int tc_alloc(txcond_t **cv){
-	int e;
-	*cv = (txcond_t*)malloc(256);
-	if(!cv){return -1;}
-	(*cv)->head = NULL;
-	(*cv)->tail = NULL;
-	tataslock_init(&(*cv)->lk);
-	(*cv)->cnt = 5;
+int tc_init(txcond_t* cv){
+	(cv)->head = NULL;
+	(cv)->tail = NULL;
+	tataslock_init(&(cv)->lk);
+	(cv)->cnt = 5;
 	return 0;
 }
 
-static int tc_free(txcond_t *cv){
+int tc_alloc(txcond_t **cv){
+	int e;
+	*cv = (txcond_t*)malloc(256);
+	if(!cv){return -1;}
+	return tc_init(*cv);
+}
+
+int tc_destroy(txcond_t *cv){
+	return 0;
+}
+
+int tc_free(txcond_t *cv){
 	free(cv); 
 	return 0;
 }
 
-static int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_timeout){
+static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct timespec *abs_timeout){
 	int e;
 
 	// create node
 	txcond_node_t* node = malloc(sizeof(txcond_node_t));
-	if(!node){return -1;}
-	e = sem_init(&node->sem, 0, 1);
-	if(!e){return -1;}
+	if(!node){assert(false);return -1;}
+	e = sem_init(&node->sem, 0, 0);
+	if(e!=0){return -1;}
 	node->next = NULL;
 	node->prev = NULL;
 	node->status = WAITING;
@@ -523,11 +531,12 @@ static int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_t
 
 	// wait
 	while(true){
-		e = sem_timedwait(&node->sem,abs_timeout);
-		if(!e){
+		if(timed){e = sem_timedwait(&node->sem,abs_timeout);}
+		else{e = sem_wait(&node->sem);}
+		if(e!=0){
 			if(errno==EINTR){continue;}
-			if(errno==EINVAL){return -1;}
-			if(errno==ETIMEDOUT){
+			else if(errno==EINVAL){assert(false);return -1;}
+			else if(timed && errno==ETIMEDOUT){
 				if(cas(&node->status,WAITING,TIMEOUT)){
 					// we won the race to clean up our node,
 					// whoever 'wakes' us up later will clean
@@ -542,6 +551,7 @@ static int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_t
 					break;
 				}
 			}
+			else{assert(false);return -1;} // unknown error
 		}
 		else{
 			// we were woken up via semaphore
@@ -557,7 +567,17 @@ static int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_t
 }
 
 
-static int tc_signal(txcond_t* cv){
+int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_timeout){
+	return _tc_waitcommon(cv,lk,true,abs_timeout);
+}
+int tc_wait(txcond_t *cv, txlock_t *lk){
+	return _tc_waitcommon(cv,lk,false,NULL);
+}
+
+
+
+
+int tc_signal(txcond_t* cv){
 	int e, i;
 	txcond_node_t* node;
 
@@ -587,7 +607,7 @@ static int tc_signal(txcond_t* cv){
 
 	// awaken waiter
 	e = sem_post(&node->sem);
-	if(!e){return -1;}
+	if(e!=0){assert(false);return -1;}
 
 	// successful awaken, race on GC
 	if(!cas(&node->status,WAITING,AWOKEN)){free(node);}
@@ -595,8 +615,8 @@ static int tc_signal(txcond_t* cv){
 	return 0;
 }
 
-static int tc_broadcast(txcond_t* cv){
-	int e;
+int tc_broadcast(txcond_t* cv){
+	int e1, e2;
 	txcond_node_t* node;
 	txcond_node_t* prev_node;
 
@@ -611,17 +631,16 @@ static int tc_broadcast(txcond_t* cv){
 	tataslock_release(&cv->lk);
 
 	// awaken everyone
-	e = 0;
+	e1 = 0;
 	while(node!=NULL){
-		e = e || sem_post(&node->sem);
-		if(node->next!=NULL){
-			prev_node = node; 
-			node = node->next;
-		}
+		e2 = sem_post(&node->sem);
+		if(e2!=0 && e1==0){e1 = e2;}
+		prev_node = node; 
+		node = node->next;
 		if(!cas(&prev_node->status,WAITING,AWOKEN)){free(prev_node);}
 	}
 
-	return e;
+	return e1;
 }
 
 
