@@ -7,10 +7,18 @@
 #include "htm_raw.h"
 #include "txlock.h"
 
+// for cond vars
+#include <time.h>
+#include <semaphore.h>
+#include "lock.h"
+#include <errno.h>
+
+
+
 #if defined(__powerpc__) || defined(__powerpc64__)
 static const char* LIBPTHREAD_PATH = "/lib/powerpc64le-linux-gnu/libpthread.so.0";
 #else
-static const char* LIBPTHREAD_PATH = "/lib64/libpthread.so.0";
+static const char* LIBPTHREAD_PATH = "libpthread.so.0"; // without specifying the path dlopen will search for the library on LIB_PATH
 #endif
 static void *libpthread_handle = 0;
 
@@ -416,3 +424,241 @@ static void uninit_lib_txlock() {
     if (libpthread_handle)
         dlclose(libpthread_handle);
 }
+
+
+
+/*
+
+// Generalized interface to txlocks
+struct _txlock_t;
+typedef struct _txlock_t txlock_t;
+int tl_alloc(txlock_t **l);
+int tl_free(txlock_t *l);
+int tl_lock(txlock_t *l);
+int tl_trylock(txlock_t *l);
+int tl_unlock(txlock_t *l);
+
+*/
+
+
+/*
+// pthreads condvar interface
+
+
+int   pthread_cond_destroy(pthread_cond_t *);
+int   pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *);
+
+int   pthread_cond_broadcast(pthread_cond_t *);
+int   pthread_cond_signal(pthread_cond_t *);
+int   pthread_cond_timedwait(pthread_cond_t *, 
+          pthread_mutex_t *, const struct timespec *);
+int   pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *);
+
+*/
+
+
+enum {WAITING, TIMEOUT, AWOKEN};
+
+struct _txcond_node_t {
+	struct _txcond_node_t* next;
+	struct _txcond_node_t* prev;
+	sem_t sem;
+	int status;
+} __attribute__((__packed__));
+
+typedef struct _txcond_node_t txcond_node_t;
+
+struct _txcond_t {
+	txcond_node_t* head;
+	txcond_node_t* tail;
+	tataslock_t lk; // from sync package
+	uint32_t cnt;
+} __attribute__((__packed__));
+
+typedef struct _txcond_t txcond_t;
+
+int tc_init(txcond_t* cv){
+	(cv)->head = NULL;
+	(cv)->tail = NULL;
+	tataslock_init(&(cv)->lk);
+	(cv)->cnt = 5;
+	return 0;
+}
+
+int tc_alloc(txcond_t **cv){
+	int e;
+	*cv = (txcond_t*)malloc(256);
+	if(!cv){return -1;}
+	return tc_init(*cv);
+}
+
+int tc_destroy(txcond_t *cv){
+	return 0;
+}
+
+int tc_free(txcond_t *cv){
+	free(cv); 
+	return 0;
+}
+
+static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct timespec *abs_timeout){
+	int e;
+
+	// create node
+	txcond_node_t* node = malloc(sizeof(txcond_node_t));
+	if(!node){assert(false);return -1;}
+	e = sem_init(&node->sem, 0, 0);
+	if(e!=0){return -1;}
+	node->next = NULL;
+	node->prev = NULL;
+	node->status = WAITING;
+
+	// enqueue into cond var queue
+	tataslock_acquire(&cv->lk);
+	if(cv->tail!=NULL){
+		node->prev = cv->tail;
+		cv->tail->next = node;
+		cv->tail = node;
+	}
+	else{
+		cv->head = node;
+		cv->tail = node;
+	}
+	tataslock_release(&cv->lk);
+
+	// release lock now that we're enqueued
+	tl_unlock(lk);
+
+	// wait
+	while(true){
+		if(timed){e = sem_timedwait(&node->sem,abs_timeout);}
+		else{e = sem_wait(&node->sem);}
+		if(e!=0){
+			if(errno==EINTR){continue;}
+			else if(errno==EINVAL){assert(false);return -1;}
+			else if(timed && errno==ETIMEDOUT){
+				if(cas(&node->status,WAITING,TIMEOUT)){
+					// we won the race to clean up our node,
+					// whoever 'wakes' us up later will clean
+					errno = ETIMEDOUT; 
+					return -1;
+				}
+				else{
+					// our semaphore was posted after
+					// we timed out, but we lost the race
+					// to clean up our node
+					free(node);
+					break;
+				}
+			}
+			else{assert(false);return -1;} // unknown error
+		}
+		else{
+			// we were woken up via semaphore
+			// race on status to figure out cleaner
+			if(cas(&node->status,WAITING,AWOKEN)){break;}
+			else{ free(node); break; }
+		}
+	}
+
+	// we've been woken up, so reacquire the lock
+	tl_lock(lk);
+	return 0;
+}
+
+
+int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_timeout){
+	return _tc_waitcommon(cv,lk,true,abs_timeout);
+}
+int tc_wait(txcond_t *cv, txlock_t *lk){
+	return _tc_waitcommon(cv,lk,false,NULL);
+}
+
+
+
+
+int tc_signal(txcond_t* cv){
+	int e, i;
+	txcond_node_t* node;
+
+	// access node
+	// tend towards LIFO, but throw in eventual FIFO
+	tataslock_acquire(&cv->lk);
+
+	// decide if accessing head or tail
+	cv->cnt = cv->cnt*1103515245 + 12345;
+	i = cv->cnt;
+
+	if(i%10==0){
+		if(cv->head == NULL){return 0;}
+		node = cv->head;
+		cv->head = cv->head->next;
+		if(cv->head==NULL){cv->tail=NULL;}
+		else{cv->head->prev = NULL;}
+	}
+	else{
+		if(cv->tail == NULL){return 0;}
+		node = cv->tail;
+		cv->tail = node->prev;
+		if(cv->tail==NULL){cv->head=NULL;}
+		else{cv->tail->next = NULL;}
+	}
+	tataslock_release(&cv->lk);
+
+	// awaken waiter
+	e = sem_post(&node->sem);
+	if(e!=0){assert(false);return -1;}
+
+	// successful awaken, race on GC
+	if(!cas(&node->status,WAITING,AWOKEN)){free(node);}
+
+	return 0;
+}
+
+int tc_broadcast(txcond_t* cv){
+	int e1, e2;
+	txcond_node_t* node;
+	txcond_node_t* prev_node;
+
+	// remove entire list
+	tataslock_acquire(&cv->lk);
+	if(cv->head == NULL){return 0;}
+	else{
+		node = cv->head;
+		cv->head = NULL;
+		cv->tail = NULL;
+	}
+	tataslock_release(&cv->lk);
+
+	// awaken everyone
+	e1 = 0;
+	while(node!=NULL){
+		e2 = sem_post(&node->sem);
+		if(e2!=0 && e1==0){e1 = e2;}
+		prev_node = node; 
+		node = node->next;
+		if(!cas(&prev_node->status,WAITING,AWOKEN)){free(prev_node);}
+	}
+
+	return e1;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

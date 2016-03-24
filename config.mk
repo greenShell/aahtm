@@ -1,4 +1,9 @@
-LIBTXLOCK_DIR=/u/lxiang/projects/txlock
+_HOSTNAME := $(shell hostname)
+MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
+DIR_PATH := $(patsubst %/,%,$(dir $(MKFILE_PATH)))
+CURRENT_DIR := $(notdir $(patsubst %/,%,$(dir $(MKFILE_PATH))))
+
+LIBTXLOCK_DIR=$(DIR_PATH)
 LIBTXLOCK_CFLAGS=-isystem $(LIBTXLOCK_DIR)/include -I$(LIBTXLOCK_DIR) 
 LIBTXLOCK_CCFLAGS=$(LIBTXLOCK_CFLAGS)
 LIBTXLOCK_CXXFLAGS=$(LIBTXLOCK_CCFLAGS)
