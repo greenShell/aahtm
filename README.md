@@ -21,12 +21,12 @@ options (in `txlock.c`) are:
 - `pthread` & `pthread_tm`: system pthread lock and its prefetching version
 
 For example:
-
-    export LIBTXLOCK=tas_tm
-    appA # use tas_tm lock for appA
-    export LIBTXLOCK=pthread
-    appB # use pthread lock for appB
-
+```bash
+export LIBTXLOCK=tas_tm
+appA # use tas_tm lock for appA
+export LIBTXLOCK=pthread
+appB # use pthread lock for appB
+```
 ### tl-pthread.so
 
 Assuming `app.bin` is a program compiled with default pthread library, running 
