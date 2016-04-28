@@ -41,15 +41,16 @@ static txlock_func_t libpthread_mutex_unlock = 0;
 static __thread void * volatile spec_lock = 0;
 static __thread int spec_lock_recursive = 0;
 
-
 int tl_pthread_mutex_init(void *m, void *attr) {
     pthread_mutex_t *mutex = (pthread_mutex_t*)m;
-    memset(&mutex->__data.__txlock, 0, sizeof(mutex->__data.__txlock));
-    return libpthread_mutex_init(mutex, (const pthread_mutexattr_t*)attr);
+    //memset(&mutex->__data.__txlock, 0, sizeof(mutex->__data.__txlock));
+    //return libpthread_mutex_init(mutex, (const pthread_mutexattr_t*)attr);
+    memset(mutex, 0, sizeof(pthread_mutex_t));
+    return 0;
 }
 
 int tl_pthread_mutex_lock(void *m) {
-    if (pthread_mutex_offset) {
+    /*if (pthread_mutex_offset) {
         pthread_mutex_t* mutex = (pthread_mutex_t*)m;
         int self = (int)pthread_self();
         //fprintf(stderr, "A %p %d %d %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count, mutex->__data.__owner, self);
@@ -66,7 +67,7 @@ int tl_pthread_mutex_lock(void *m) {
             return ret; 
             //return libpthread_mutex_lock((txlock_t*)mutex);
         }
-    } else {
+    } else*/ {
         return func_tl_lock((txlock_t*)m);
     }
 /*    if (spec_lock == 0) { // not in HTM
@@ -90,7 +91,7 @@ int tl_pthread_mutex_lock(void *m) {
 }
 
 int tl_pthread_mutex_trylock(void *m) {
-    if (pthread_mutex_offset) {
+    /*if (pthread_mutex_offset) {
         assert(!spec_lock);
         pthread_mutex_t* mutex = (pthread_mutex_t*)m;
         //fprintf(stderr, "T %p %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count);
@@ -107,15 +108,15 @@ int tl_pthread_mutex_trylock(void *m) {
             return ret;
         }
         //return libpthread_mutex_trylock((txlock_t*)mutex);
-    } else {
-        assert(func_tl_trylock);
+    } else*/ {
+        //assert(func_tl_trylock);
         return func_tl_trylock((txlock_t*)m);
     }
 }
 
 
 int tl_pthread_mutex_unlock (void *m) {
-    if (pthread_mutex_offset) {
+    /*if (pthread_mutex_offset) {
         pthread_mutex_t* mutex = (pthread_mutex_t*)m;
         //fprintf(stderr, "R %p %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count);
         assert(!spec_lock);
@@ -128,7 +129,7 @@ int tl_pthread_mutex_unlock (void *m) {
         } else
             return func_tl_unlock((txlock_t*)&((pthread_mutex_t*)mutex)->__data.__txlock);
         //return libpthread_mutex_unlock((txlock_t*)mutex);
-    } else {
+    } else */ {
         return func_tl_unlock((txlock_t*)m);
         //return libpthread_mutex_unlock((txlock_t*)mutex);
     }
@@ -353,8 +354,8 @@ struct _lock_type_t {
 typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
-    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
-    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
+//    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
+//    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
     {"tas",         sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock}, 
     {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm}, 
 //    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
@@ -381,9 +382,9 @@ static void setup_pthread_funcs() {
     libpthread_mutex_trylock = (txlock_func_t)dlsym(handle, "pthread_mutex_trylock");
     libpthread_mutex_unlock = (txlock_func_t)dlsym(handle, "pthread_mutex_unlock");
 
-    lock_types[1].lock_fun = lock_types[0].lock_fun = libpthread_mutex_lock; 
-    lock_types[1].trylock_fun = lock_types[0].trylock_fun = libpthread_mutex_trylock;
-    lock_types[1].unlock_fun = lock_types[0].unlock_fun = libpthread_mutex_unlock;
+    //lock_types[1].lock_fun = lock_types[0].lock_fun = libpthread_mutex_lock; 
+    //lock_types[1].trylock_fun = lock_types[0].trylock_fun = libpthread_mutex_trylock;
+    //lock_types[1].unlock_fun = lock_types[0].unlock_fun = libpthread_mutex_unlock;
 
     if ((error = dlerror()) != NULL)  {
         fputs(error, stderr);
@@ -411,8 +412,8 @@ static void init_lib_txlock() {
     func_tl_trylock = using_lock_type->trylock_fun;
     func_tl_unlock = using_lock_type->unlock_fun;
 
-    if (strncmp(using_lock_type->name, "pthread", 7))
-        pthread_mutex_offset = 1;
+    //if (strncmp(using_lock_type->name, "pthread", 7))
+    //    pthread_mutex_offset = 1;
 
     fprintf(stderr, "LIBTXLOCK: %s\n", using_lock_type->name);
     fflush(stderr);
