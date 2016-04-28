@@ -10,7 +10,7 @@
 // for cond vars
 #include <time.h>
 #include <semaphore.h>
-#include "lock.h"
+#include <stdbool.h>
 #include <errno.h>
 
 
@@ -186,25 +186,35 @@ static int tas_alloc(tas_lock_t **l) {
     return 0;
 };
 
+static int tas_init(tas_lock_t *l) {
+    l->val = 0;
+    l->count = 0;
+    return 0;
+};
+
 static inline int tatas(volatile int32_t* val, int32_t v) {
     return *val || __sync_lock_test_and_set(val, v); 
 }
 
 static int tas_lock(tas_lock_t *l) {
+		printf("tas-locking %x\n",l);
     if (tatas(&l->val, 1)) {
         int s = spin_begin();
         do {
             s = spin_wait(s); 
         } while (tatas(&l->val, 1));
     }
+		printf("tas-locked %x\n",l);
     return 0;
 }
 
 static int tas_trylock(tas_lock_t *l) {
+		printf("tas-trylock %x\n",l);
     return tatas(&l->val, 1);
 }
 
 static int tas_unlock(tas_lock_t *l) {
+		printf("tas-unlock %x\n",l);
     __sync_lock_release(&l->val);
     return 0;
 }
@@ -471,17 +481,17 @@ typedef struct _txcond_node_t txcond_node_t;
 struct _txcond_t {
 	txcond_node_t* head;
 	txcond_node_t* tail;
-	tataslock_t lk; // from sync package
+	tas_lock_t lk; 
 	uint32_t cnt;
 } __attribute__((__packed__));
 
 typedef struct _txcond_t txcond_t;
 
 int tc_init(txcond_t* cv){
-	(cv)->head = NULL;
-	(cv)->tail = NULL;
-	tataslock_init(&(cv)->lk);
-	(cv)->cnt = 5;
+	cv->head = NULL;
+	cv->tail = NULL;
+	tas_init(&(cv->lk));
+	cv->cnt = 5;
 	return 0;
 }
 
@@ -504,6 +514,8 @@ int tc_free(txcond_t *cv){
 static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct timespec *abs_timeout){
 	int e;
 
+	printf("tc-wait cv:%x lk:%x ilk:%x\n",cv,lk,&cv->lk);
+
 	// create node
 	txcond_node_t* node = malloc(sizeof(txcond_node_t));
 	if(!node){assert(false);return -1;}
@@ -513,8 +525,10 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 	node->prev = NULL;
 	node->status = WAITING;
 
+
+	printf("%d\n",cv->lk);
 	// enqueue into cond var queue
-	tataslock_acquire(&cv->lk);
+	tas_lock(&cv->lk);
 	if(cv->tail!=NULL){
 		node->prev = cv->tail;
 		cv->tail->next = node;
@@ -524,10 +538,12 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 		cv->head = node;
 		cv->tail = node;
 	}
-	tataslock_release(&cv->lk);
-
+	tas_unlock(&cv->lk);
+	printf("tc-wait-enqueued cv:%x lk:%x\n",cv,lk);
 	// release lock now that we're enqueued
-	tl_unlock(lk);
+	tl_pthread_mutex_unlock(lk);
+
+
 
 	// wait
 	while(true){
@@ -537,7 +553,7 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 			if(errno==EINTR){continue;}
 			else if(errno==EINVAL){assert(false);return -1;}
 			else if(timed && errno==ETIMEDOUT){
-				if(cas(&node->status,WAITING,TIMEOUT)){
+				if(__sync_bool_compare_and_swap(&node->status,WAITING,TIMEOUT)){
 					// we won the race to clean up our node,
 					// whoever 'wakes' us up later will clean
 					errno = ETIMEDOUT; 
@@ -556,7 +572,7 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 		else{
 			// we were woken up via semaphore
 			// race on status to figure out cleaner
-			if(cas(&node->status,WAITING,AWOKEN)){break;}
+			if(__sync_bool_compare_and_swap(&node->status,WAITING,AWOKEN)){break;}
 			else{ free(node); break; }
 		}
 	}
@@ -581,54 +597,60 @@ int tc_signal(txcond_t* cv){
 	int e, i;
 	txcond_node_t* node;
 
+	printf("tc-signal cv:%x ilk:%x\n",cv,&cv->lk);
+
 	// access node
 	// tend towards LIFO, but throw in eventual FIFO
-	tataslock_acquire(&cv->lk);
+	tas_lock(&cv->lk);
 
 	// decide if accessing head or tail
+	if(cv->cnt==0){cv->cnt=5;}
 	cv->cnt = cv->cnt*1103515245 + 12345;
 	i = cv->cnt;
 
 	if(i%10==0){
-		if(cv->head == NULL){return 0;}
+		if(cv->head == NULL){	tas_unlock(&cv->lk); return 0;}
 		node = cv->head;
 		cv->head = cv->head->next;
 		if(cv->head==NULL){cv->tail=NULL;}
 		else{cv->head->prev = NULL;}
 	}
 	else{
-		if(cv->tail == NULL){return 0;}
+		if(cv->tail == NULL){	tas_unlock(&cv->lk); return 0;}
 		node = cv->tail;
 		cv->tail = node->prev;
 		if(cv->tail==NULL){cv->head=NULL;}
 		else{cv->tail->next = NULL;}
 	}
-	tataslock_release(&cv->lk);
+	tas_unlock(&cv->lk);
 
 	// awaken waiter
 	e = sem_post(&node->sem);
 	if(e!=0){assert(false);return -1;}
 
 	// successful awaken, race on GC
-	if(!cas(&node->status,WAITING,AWOKEN)){free(node);}
+	if(!__sync_bool_compare_and_swap(&node->status,WAITING,AWOKEN)){free(node);}
 
 	return 0;
 }
 
 int tc_broadcast(txcond_t* cv){
+
+	printf("tc-signal cv:%x ilk:%x\n",cv,&cv->lk);
+
 	int e1, e2;
 	txcond_node_t* node;
 	txcond_node_t* prev_node;
 
 	// remove entire list
-	tataslock_acquire(&cv->lk);
-	if(cv->head == NULL){return 0;}
+	tas_lock(&cv->lk);
+	if(cv->head == NULL){	tas_unlock(&cv->lk); return 0; }
 	else{
 		node = cv->head;
 		cv->head = NULL;
 		cv->tail = NULL;
 	}
-	tataslock_release(&cv->lk);
+	tas_unlock(&cv->lk);
 
 	// awaken everyone
 	e1 = 0;
@@ -637,7 +659,7 @@ int tc_broadcast(txcond_t* cv){
 		if(e2!=0 && e1==0){e1 = e2;}
 		prev_node = node; 
 		node = node->next;
-		if(!cas(&prev_node->status,WAITING,AWOKEN)){free(prev_node);}
+		if(!__sync_bool_compare_and_swap(&prev_node->status,WAITING,AWOKEN)){free(prev_node);}
 	}
 
 	return e1;
