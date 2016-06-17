@@ -515,7 +515,7 @@ int tc_free(txcond_t *cv){
 static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct timespec *abs_timeout){
 	int e;
 
-	printf("tc-wait cv:%x lk:%x ilk:%x\n",cv,lk,&cv->lk);
+	//printf("tc-wait cv:%x lk:%x ilk:%x\n",cv,lk,&cv->lk);
 
 	// create node
 	txcond_node_t* node = malloc(sizeof(txcond_node_t));
@@ -540,7 +540,7 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 		cv->tail = node;
 	}
 	tas_unlock(&cv->lk);
-	printf("tc-wait-enqueued cv:%x lk:%x\n",cv,lk);
+	//printf("tc-wait-enqueued cv:%x lk:%x\n",cv,lk);
 	// release lock now that we're enqueued
 	tl_pthread_mutex_unlock(lk);
 
@@ -598,7 +598,7 @@ int tc_signal(txcond_t* cv){
 	int e, i;
 	txcond_node_t* node;
 
-	printf("tc-signal cv:%x ilk:%x\n",cv,&cv->lk);
+	//printf("tc-signal cv:%x ilk:%x\n",cv,&cv->lk);
 
 	// access node
 	// tend towards LIFO, but throw in eventual FIFO
@@ -637,7 +637,7 @@ int tc_signal(txcond_t* cv){
 
 int tc_broadcast(txcond_t* cv){
 
-	printf("tc-signal cv:%x ilk:%x\n",cv,&cv->lk);
+	//printf("tc-broadcast cv:%x ilk:%x\n",cv,&cv->lk);
 
 	int e1, e2;
 	txcond_node_t* node;
