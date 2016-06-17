@@ -19,3 +19,16 @@ bench/memcached-1.4.25/timedrun
 bench/memcached-1.4.25/autom4te.cache/*
 bench/memcached-1.4.25/memcached
 bench/memcached-1.4.25/memcached-debug
+
+bench/libmemcached-1.0.18/libtest/yatlcon.h
+bench/libmemcached-1.0.18/libtool
+bench/libmemcached-1.0.18/mem_config.h
+bench/libmemcached-1.0.18/stamp-h1
+bench/libmemcached-1.0.18/support/libmemcached.pc
+bench/libmemcached-1.0.18/**/.deps/*
+bench/libmemcached-1.0.18/libmemcached-1.0/configure.h
+bench/libmemcached-1.0.18/Makefile
+bench/libmemcached-1.0.18/aminclude.am
+bench/libmemcached-1.0.18/config.status
+bench/libmemcached-1.0.18/docs/conf.py
+bench/libmemcached-1.0.18/libhashkit/hashkitcon.h
