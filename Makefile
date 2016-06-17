@@ -10,7 +10,7 @@ libtxlock.so: txlock.so
 	gcc -shared txlock.so -ldl -o $@
 
 libtxlock.a: txlock.o
-	gcc-ar rcs $@ txlock.o
+	ar rcs $@ txlock.o
 
 tl-pthread.so: tl-pthread.c txlock.so
 	gcc $(CFLAGS) -fPIC -flto -c tl-pthread.c -o tl-pthread.o
