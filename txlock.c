@@ -198,24 +198,24 @@ static inline int tatas(volatile int32_t* val, int32_t v) {
 }
 
 static int tas_lock(tas_lock_t *l) {
-		printf("tas-locking %x\n",l);
+		//printf("tas-locking %x\n",l);
     if (tatas(&l->val, 1)) {
         int s = spin_begin();
         do {
             s = spin_wait(s); 
         } while (tatas(&l->val, 1));
     }
-		printf("tas-locked %x\n",l);
+		//printf("tas-locked %x\n",l);
     return 0;
 }
 
 static int tas_trylock(tas_lock_t *l) {
-		printf("tas-trylock %x\n",l);
+		//printf("tas-trylock %x\n",l);
     return tatas(&l->val, 1);
 }
 
 static int tas_unlock(tas_lock_t *l) {
-		printf("tas-unlock %x\n",l);
+		//printf("tas-unlock %x\n",l);
     __sync_lock_release(&l->val);
     return 0;
 }
@@ -527,7 +527,7 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 	node->status = WAITING;
 
 
-	printf("%d\n",cv->lk);
+	//printf("%d\n",cv->lk);
 	// enqueue into cond var queue
 	tas_lock(&cv->lk);
 	if(cv->tail!=NULL){
