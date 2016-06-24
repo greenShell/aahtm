@@ -238,7 +238,7 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
 // pthreads TM =========================
 //
 
-static int pthread_tm(pthread_mutex_t *l) {
+static int pthread_lock_tm(pthread_mutex_t *l) {
   if (spec_lock){return 0;}
 
   int tries = 0;
@@ -289,7 +289,7 @@ typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
     {"pthread",     sizeof(pthread_mutex_t), NULL, NULL, NULL}, 
-    {"pthread_tm",  sizeof(pthread_mutex_t), NULL, NULL, NULL}, 
+    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock_tm, (txlock_func_t)pthread_trylock_tm, (txlock_func_t)pthread_unlock_tm}, 
     {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock}, 
     {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm}, 
 //    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
