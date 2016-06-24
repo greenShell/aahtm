@@ -40,7 +40,11 @@ int pthread_cond_wait(void *cond, void *mutex) {
     return tc_wait((txcond_t*)cond, (txlock_t*)mutex);
 }
 
-__attribute__((constructor(200))) 
+void pthread_exit(void *retval) {
+    return __tl_pthread_exit(retval);
+}
+
+__attribute__((constructor(200)))
 static void init_tl_pthread() {
     tl_replace_libpthread(1);
 }

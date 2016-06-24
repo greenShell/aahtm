@@ -26,4 +26,4 @@ test: test.c
 	gcc $(CFLAGS) $(LIBTXLOCK_CFLAGS) test.c $(LIBTXLOCK_LDFLAGS) -o $@
 
 clean:
-	$(RM) *.o *.so *.a
+	$(RM) *.o *.so *.a test

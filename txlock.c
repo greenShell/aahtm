@@ -6,6 +6,7 @@
 #include <pthread.h> // for pthread_mutex_t only
 #include "htm_raw.h"
 #include "txlock.h"
+#include <x86intrin.h> // __rdtsc
 
 // for cond vars
 #include <time.h>
@@ -13,7 +14,16 @@
 #include <stdbool.h>
 #include <errno.h>
 
+typedef struct _tm_stats_t {
+    uint64_t dur;           // total cycles in TM mode
+    uint32_t tries;         // # of TM calls
+    uint32_t stops;         // # of self-stop
+    uint32_t overflows;     // overflow aborts
+    uint32_t conflicts;     // conflict aborts
+} __attribute__ ((aligned(64))) tm_stats_t;
 
+static __thread tm_stats_t my_tm_stats;
+static tm_stats_t tm_stats __attribute__ ((aligned(64)));
 
 #if defined(__powerpc__) || defined(__powerpc64__)
 static const char* LIBPTHREAD_PATH = "/lib/powerpc64le-linux-gnu/libpthread.so.0";
@@ -37,101 +47,44 @@ static fun_pthread_mutex_init_t libpthread_mutex_init = 0;
 static txlock_func_t libpthread_mutex_lock = 0;
 static txlock_func_t libpthread_mutex_trylock = 0;
 static txlock_func_t libpthread_mutex_unlock = 0;
+static void (*libpthread_exit)(void *) = 0;
 
 static __thread void * volatile spec_lock = 0;
-static __thread int spec_lock_recursive = 0;
+//static __thread int spec_lock_recursive = 0;
 
 int tl_pthread_mutex_init(void *m, void *attr) {
     pthread_mutex_t *mutex = (pthread_mutex_t*)m;
     //memset(&mutex->__data.__txlock, 0, sizeof(mutex->__data.__txlock));
-    //return libpthread_mutex_init(mutex, (const pthread_mutexattr_t*)attr);
-    memset(mutex, 0, sizeof(pthread_mutex_t));
-    return 0;
+    if (pthread_mutex_offset)
+        return libpthread_mutex_init(mutex, (const pthread_mutexattr_t*)attr);
+    else {
+        memset(mutex, 0, sizeof(pthread_mutex_t));
+        return 0;
+    }
 }
 
 int tl_pthread_mutex_lock(void *m) {
-    /*if (pthread_mutex_offset) {
-        pthread_mutex_t* mutex = (pthread_mutex_t*)m;
-        int self = (int)pthread_self();
-        //fprintf(stderr, "A %p %d %d %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count, mutex->__data.__owner, self);
-        assert(!spec_lock);
-        if(!spec_lock && mutex->__data.__count>0 && pthread_equal(mutex->__data.__owner, self)) {
-            mutex->__data.__count++;
-            return 0;
-        } else {
-            int ret = func_tl_lock((txlock_t*)&mutex->__data.__txlock); 
-            if  (!spec_lock) {
-                mutex->__data.__count = 1;
-                mutex->__data.__owner = self;
-            }
-            return ret; 
-            //return libpthread_mutex_lock((txlock_t*)mutex);
-        }
-    } else*/ {
+    if (pthread_mutex_offset) {
+        return libpthread_mutex_lock((txlock_t*)m);
+    } else {
         return func_tl_lock((txlock_t*)m);
     }
-/*    if (spec_lock == 0) { // not in HTM
-        //if (__sync_lock_test_and_set((volatile int*)m, 1)) {
-        if (libpthread_mutex_trylock(m)) {
-            do {
-                spec_lock == m;
-                if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
-                    return 0;
-                }
-                spec_lock = 0;
-                for (int i=0; i<BACKOFF_INIT; i++)
-                    __asm volatile("pause\n": : :"memory");
-
-            //} while (__sync_lock_test_and_set((volatile int*)m, 1));
-            } while (libpthread_mutex_trylock(m));
-        }
-    } else if (spec_lock == m) {
-        spec_lock_recursive++;
-    }*/
 }
 
 int tl_pthread_mutex_trylock(void *m) {
-    /*if (pthread_mutex_offset) {
-        assert(!spec_lock);
-        pthread_mutex_t* mutex = (pthread_mutex_t*)m;
-        //fprintf(stderr, "T %p %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count);
-        int self = pthread_self();
-        if(!spec_lock && mutex->__data.__count>0 && pthread_equal(mutex->__data.__owner, self)) {
-            mutex->__data.__count++;
-            return 0;
-        } else {
-            int ret = func_tl_trylock((txlock_t*)&mutex->__data.__txlock);
-            if  (!ret && !spec_lock) {
-                mutex->__data.__count = 1;
-                mutex->__data.__owner = self;
-            }
-            return ret;
-        }
-        //return libpthread_mutex_trylock((txlock_t*)mutex);
-    } else*/ {
-        //assert(func_tl_trylock);
+    if (pthread_mutex_offset) {
+        return libpthread_mutex_trylock((txlock_t*)m);
+    } else {
         return func_tl_trylock((txlock_t*)m);
     }
 }
 
 
 int tl_pthread_mutex_unlock (void *m) {
-    /*if (pthread_mutex_offset) {
-        pthread_mutex_t* mutex = (pthread_mutex_t*)m;
-        //fprintf(stderr, "R %p %d\n", mutex, ((pthread_mutex_t*)mutex)->__data.__count);
-        assert(!spec_lock);
-        if  (!spec_lock) {
-            if (--mutex->__data.__count == 0) {
-                mutex->__data.__owner = 0;
-                return func_tl_unlock((txlock_t*)&((pthread_mutex_t*)mutex)->__data.__txlock);
-            }
-            return 0;
-        } else
-            return func_tl_unlock((txlock_t*)&((pthread_mutex_t*)mutex)->__data.__txlock);
-        //return libpthread_mutex_unlock((txlock_t*)mutex);
-    } else */ {
+    if (pthread_mutex_offset) {
+        return libpthread_mutex_unlock((txlock_t*)m);
+    } else {
         return func_tl_unlock((txlock_t*)m);
-        //return libpthread_mutex_unlock((txlock_t*)mutex);
     }
 }
 
@@ -157,14 +110,14 @@ int tl_unlock(txlock_t *l) { return func_tl_unlock(l); }
 #else
     static inline void cpu_relax() { __asm volatile("pause\n": : :"memory"); }
 #endif
-static int SPIN_INIT = 16; 
-static int SPIN_CELL = 1024; 
-static float SPIN_FACTOR = 2; 
+static int SPIN_INIT = 16;
+static int SPIN_CELL = 1024;
+static float SPIN_FACTOR = 2;
 static inline int spin_begin() { return SPIN_INIT; }
-static inline int spin_wait(int s) { 
+static inline int spin_wait(int s) {
     for (int i=0; i<s; i++)
-        cpu_relax();        
-    int n = SPIN_FACTOR * s; 
+        cpu_relax();
+    int n = SPIN_FACTOR * s;
     return n > SPIN_CELL ? SPIN_CELL : n;
 }
 
@@ -194,7 +147,7 @@ static int tas_init(tas_lock_t *l) {
 };
 
 static inline int tatas(volatile int32_t* val, int32_t v) {
-    return *val || __sync_lock_test_and_set(val, v); 
+    return *val || __sync_lock_test_and_set(val, v);
 }
 
 static int tas_lock(tas_lock_t *l) {
@@ -202,7 +155,7 @@ static int tas_lock(tas_lock_t *l) {
     if (tatas(&l->val, 1)) {
         int s = spin_begin();
         do {
-            s = spin_wait(s); 
+            s = spin_wait(s);
         } while (tatas(&l->val, 1));
     }
 		//printf("tas-locked %x\n",l);
@@ -223,7 +176,7 @@ static int tas_unlock(tas_lock_t *l) {
 static int tas_lock_tm(tas_lock_t *l) {
     if (spec_lock == 0) { // not in HTM
         if (tatas(&l->val, 1)) {
-            int tries = 0; 
+            int tries = 0;
             //int order = __sync_fetch_and_add(&l->count, 1);
             int s = spin_begin();
                 spec_lock = l;
@@ -237,7 +190,7 @@ static int tas_lock_tm(tas_lock_t *l) {
 
 
             while (tatas(&l->val, 1))
-                s = spin_wait(s); 
+                s = spin_wait(s);
 
             //__sync_fetch_and_sub(&l->count, 1);
         }
@@ -279,7 +232,7 @@ static int ticket_lock(ticket_lock_t *l) {
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
-        spin_wait(16*dist); 
+        spin_wait(16*dist);
     }
     return 0;
 }
@@ -307,7 +260,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
         if (dist <= 2 && tries < 4) {
-            spin_wait(8); 
+            spin_wait(8);
             spec_lock = l;
             if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
             //    if (dist==1)
@@ -317,7 +270,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
             spec_lock = 0;
             tries++;
         } else
-            spin_wait(16*dist); 
+            spin_wait(16*dist);
     }
     return 0;
 }
@@ -364,13 +317,13 @@ struct _lock_type_t {
 typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
-//    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
-//    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL}, 
-    {"tas",         sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock}, 
-    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm}, 
-//    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
-    {"ticket",      sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock}, 
-    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm}, 
+    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL},
+    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_alloc_t)tl_pthread_mutex_alloc, tl_general_free, NULL, NULL, NULL},
+    {"tas",         sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock},
+    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm},
+//    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_alloc_t)tas_alloc, tl_general_free, (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle},
+    {"ticket",      sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock},
+    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_alloc_t)ticket_alloc, tl_general_free, (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm},
 };
 
 static lock_type_t *using_lock_type = &lock_types[0];
@@ -392,9 +345,9 @@ static void setup_pthread_funcs() {
     libpthread_mutex_trylock = (txlock_func_t)dlsym(handle, "pthread_mutex_trylock");
     libpthread_mutex_unlock = (txlock_func_t)dlsym(handle, "pthread_mutex_unlock");
 
-    //lock_types[1].lock_fun = lock_types[0].lock_fun = libpthread_mutex_lock; 
-    //lock_types[1].trylock_fun = lock_types[0].trylock_fun = libpthread_mutex_trylock;
-    //lock_types[1].unlock_fun = lock_types[0].unlock_fun = libpthread_mutex_unlock;
+    lock_types[1].lock_fun = lock_types[0].lock_fun = libpthread_mutex_lock;
+    lock_types[1].trylock_fun = lock_types[0].trylock_fun = libpthread_mutex_trylock;
+    lock_types[1].unlock_fun = lock_types[0].unlock_fun = libpthread_mutex_unlock;
 
     if ((error = dlerror()) != NULL)  {
         fputs(error, stderr);
@@ -405,14 +358,14 @@ static void setup_pthread_funcs() {
 __attribute__((constructor(201)))  // after tl-pthread.so
 static void init_lib_txlock() {
     setup_pthread_funcs();
- 
+
     const char *type = getenv("LIBTXLOCK");
     if (type) {
-        for (int i=0; i<sizeof(lock_types)/sizeof(lock_type_t); i++) {
+        for (size_t i=0; i<sizeof(lock_types)/sizeof(lock_type_t); i++) {
             if (strcmp(type, lock_types[i].name) == 0) {
                 using_lock_type = &lock_types[i];
                 break;
-            } 
+            }
         }
     }
 
@@ -422,16 +375,39 @@ static void init_lib_txlock() {
     func_tl_trylock = using_lock_type->trylock_fun;
     func_tl_unlock = using_lock_type->unlock_fun;
 
-    //if (strncmp(using_lock_type->name, "pthread", 7))
-    //    pthread_mutex_offset = 1;
+    if (strncmp(using_lock_type->name, "pthread", 7))
+        pthread_mutex_offset = 1;
 
     fprintf(stderr, "LIBTXLOCK: %s\n", using_lock_type->name);
     fflush(stderr);
 }
 
 
-__attribute__((destructor)) 
-static void uninit_lib_txlock() {
+void __tl_pthread_exit(void *retval)
+{
+    // sync my local stats to the global stats
+    __sync_fetch_and_add(&tm_stats.dur, my_tm_stats.dur);
+    __sync_fetch_and_add(&tm_stats.tries, my_tm_stats.tries);
+    __sync_fetch_and_add(&tm_stats.stops, my_tm_stats.stops);
+    __sync_fetch_and_add(&tm_stats.overflows, my_tm_stats.overflows);
+    __sync_fetch_and_add(&tm_stats.conflicts, my_tm_stats.conflicts);
+    // reset my local stats in case the thread stack is reused by a new thread later on
+    memset(&my_tm_stats, 0, sizeof(my_tm_stats));
+    libpthread_exit(retval);
+}
+
+__attribute__((destructor))
+static void uninit_lib_txlock()
+{
+    fprintf(stderr, "LIBTXLOCK: %s", using_lock_type->name);
+    if (tm_stats.tries) {
+        fprintf(stderr, ", avg_dur: %d, tries: %d, overflows: %d, conflicts: %d, stops: %d",
+                        (int)(tm_stats.dur/(tm_stats.tries - tm_stats.stops)),
+                        tm_stats.tries, tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+
     if (libpthread_handle)
         dlclose(libpthread_handle);
 }
@@ -461,7 +437,7 @@ int   pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *);
 
 int   pthread_cond_broadcast(pthread_cond_t *);
 int   pthread_cond_signal(pthread_cond_t *);
-int   pthread_cond_timedwait(pthread_cond_t *, 
+int   pthread_cond_timedwait(pthread_cond_t *,
           pthread_mutex_t *, const struct timespec *);
 int   pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *);
 
@@ -482,7 +458,7 @@ typedef struct _txcond_node_t txcond_node_t;
 struct _txcond_t {
 	txcond_node_t* head;
 	txcond_node_t* tail;
-	tas_lock_t lk; 
+	tas_lock_t lk;
 	uint32_t cnt;
 } __attribute__((__packed__));
 
@@ -508,7 +484,7 @@ int tc_destroy(txcond_t *cv){
 }
 
 int tc_free(txcond_t *cv){
-	free(cv); 
+	free(cv);
 	return 0;
 }
 
@@ -557,7 +533,7 @@ static int _tc_waitcommon(txcond_t *cv, txlock_t *lk, bool timed, const struct t
 				if(__sync_bool_compare_and_swap(&node->status,WAITING,TIMEOUT)){
 					// we won the race to clean up our node,
 					// whoever 'wakes' us up later will clean
-					errno = ETIMEDOUT; 
+					errno = ETIMEDOUT;
 					return -1;
 				}
 				else{
@@ -658,30 +634,11 @@ int tc_broadcast(txcond_t* cv){
 	while(node!=NULL){
 		e2 = sem_post(&node->sem);
 		if(e2!=0 && e1==0){e1 = e2;}
-		prev_node = node; 
+		prev_node = node;
 		node = node->next;
 		if(!__sync_bool_compare_and_swap(&prev_node->status,WAITING,AWOKEN)){free(prev_node);}
 	}
 
 	return e1;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
