@@ -48,6 +48,11 @@ static txlock_func_t libpthread_mutex_unlock = 0;
 
 // State for HTM speculation
 static __thread void * volatile spec_lock = 0;
+int MIN_DISTANCE = 0;
+int MAX_DISTANCE = 2;
+int NUM_TRIES = 4;
+
+// thread local counters
 static __thread int spec_lock_recursive = 0;
 
 
@@ -109,23 +114,16 @@ static int tas_unlock(tas_lock_t *l) {
 static int tas_lock_tm(tas_lock_t *l) {
 	if (spec_lock == 0) { // not in HTM
 		if (tatas(&l->val, 1)) {
-			int tries = 0; 
-			//int order = __sync_fetch_and_add(&l->count, 1);
+			// if lock is held, start speculating
 			int s = spin_begin();
 			spec_lock = l;
-			if (tries < 3 && HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
-				//      if (order==0)
-				//          spec_lock_recursive = l->val;
-				// s = l;
+			if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 				return 0;
 			}
-			tries++;
+			// else, contend for the lock
 			spec_lock = 0;
-
 			while (tatas(&l->val, 1))
 				s = spin_wait(s); 
-
-			//__sync_fetch_and_sub(&l->count, 1);
 		}
 	} else if (spec_lock == l) {
 			//spec_lock_recursive++;
@@ -134,32 +132,29 @@ static int tas_lock_tm(tas_lock_t *l) {
 }
 
 static int tas_trylock_tm(tas_lock_t *l) {
-    if (spec_lock == 0) { // not in HTM
-        return tatas(&l->val, 1);
-    } else if (spec_lock == l) {
-        //spec_lock_recursive++;
-    }
-    return 0;
+	if (spec_lock == 0) { // not in HTM
+		return tatas(&l->val, 1);
+	} else if (spec_lock == l) {
+		//spec_lock_recursive++;
+	}
+	return 0;
 }
 
 static int tas_unlock_tm(tas_lock_t *l) {
-    if (spec_lock) { // in htm
-    //   if (spec_lock == l) {
-    //       if (--spec_lock_recursive==0)
-    //            HTM_ABORT(7);
-    //   }
-    } else { // not in HTM
-        __sync_lock_release(&l->val);
-    }
-    return 0;
+	if (spec_lock) { // in htm 
+	} 
+	else { // not in HTM
+		  __sync_lock_release(&l->val);
+	}
+	return 0;
 }
 
 // ticket lock =========================
 //
 
 struct _ticket_lock_t {
-    volatile uint32_t next;
-    volatile uint32_t now;
+	volatile uint32_t next;
+	volatile uint32_t now;
 } __attribute__((__packed__));
 
 typedef struct _ticket_lock_t ticket_lock_t;
@@ -198,7 +193,8 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
-        if (dist <= 2 && tries < 4) {
+        if (dist <= MAX_DISTANCE &&
+				 dist >= MIN_DISTANCE && NUM_TRIES < 4) {
             spin_wait(8); 
             spec_lock = l;
             if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
@@ -294,7 +290,6 @@ static __thread mcs_node_t* my_used_nodes = NULL;
 
 struct _mcs_lock_t {
   volatile mcs_node_t* tail;
-	volatile now_serving;
 } __attribute__((__packed__));
 
 typedef struct _mcs_lock_t mcs_lock_t;
@@ -463,7 +458,7 @@ static void init_lib_txlock() {
     setup_pthread_funcs();
  
 		// determine lock type
-    const char *type = getenv("LIBTXLOCK");
+    const char *type = getenv("LIBTXLOCK_LOCK");
     if (type) {
         for (int i=0; i<sizeof(lock_types)/sizeof(lock_type_t); i++) {
             if (strcmp(type, lock_types[i].name) == 0) {
@@ -479,7 +474,14 @@ static void init_lib_txlock() {
     func_tl_unlock = using_lock_type->unlock_fun;
 
 
-    fprintf(stderr, "LIBTXLOCK: %s\n", using_lock_type->name);
+		// read auxiliary arguments
+    MAX_DISTANCE = atoi(getenv("LIBTXLOCK_MAX_DISTANCE"));
+    MIN_DISTANCE = atoi(getenv("LIBTXLOCK_MIN_DISTANCE"));
+    NUM_TRIES = atoi(getenv("LIBTXLOCK_NUM_TRIES"));
+
+
+		// notify user of arguments
+    fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
     fflush(stderr);
 }
 
