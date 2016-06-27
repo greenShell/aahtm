@@ -116,6 +116,7 @@ static int tas_lock_tm(tas_lock_t *l) {
 			if (tries < 3 && HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 				//      if (order==0)
 				//          spec_lock_recursive = l->val;
+				// s = l;
 				return 0;
 			}
 			tries++;
@@ -274,6 +275,137 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
     return 0;
 }
 
+// queue lock ================================
+struct _mcs_lock_t;
+
+struct _mcs_node_t{
+	volatile struct _mcs_node_t* lock_next;
+	volatile bool wait;
+	volatile uint64_t cnt;
+	struct _mcs_node_t* list_next;
+	struct _mcs_node_t* list_prev;
+	struct _mcs_lock_t* lock;
+} __attribute__((__packed__));
+
+typedef struct _mcs_node_t mcs_node_t;
+
+static __thread mcs_node_t* my_free_nodes = NULL;
+static __thread mcs_node_t* my_used_nodes = NULL;
+
+struct _mcs_lock_t {
+  volatile mcs_node_t* tail;
+	volatile now_serving;
+} __attribute__((__packed__));
+
+typedef struct _mcs_lock_t mcs_lock_t;
+
+static void alloc_more_nodes(){
+	const int NUM_NODES = 8;
+	mcs_node_t* nodes = malloc(sizeof(mcs_node_t)*NUM_NODES);
+	assert(nodes!=NULL);
+	for(int i = 0; i<NUM_NODES; i++){
+		nodes[i].list_next = &nodes[i+1];
+		nodes[i].list_prev=NULL;
+		nodes[i].wait = true;
+		nodes[i].lock = NULL;
+		nodes[i].lock_next=NULL;
+		nodes[i].cnt = 0;
+	}
+	nodes[NUM_NODES-1].list_next=NULL;
+	my_free_nodes = nodes;
+}
+
+static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
+  if (spec_lock){return 0;}
+
+	// get a free node
+	mcs_node_t* mine;
+	mine = my_free_nodes;
+	if(mine == NULL){
+		alloc_more_nodes();
+		mine = my_free_nodes;
+		assert(mine!=NULL);
+	}	
+
+  // init my qnode
+  mine->lock_next = NULL;
+	mine->lock = lk;
+	mine->wait = true;
+
+	// then swap it into the root pointer
+	mcs_node_t* pred = NULL;
+	if(try_lock){
+		if(!__sync_bool_compare_and_swap(&lk->tail, NULL, mine)){
+			return 1; // return failure
+		}
+	}
+	else{
+	  pred = (mcs_node_t*)__sync_lock_test_and_set(&lk->tail, mine);
+	}
+
+	// now set my flag, point pred to me, and wait for my flag to be unset
+	if (pred != NULL) {
+		mine->wait = true;
+		pred->lock_next = mine;
+		while (mine->wait) {} // spin
+	}
+
+	// move node off free list and to used list
+	my_free_nodes = mine->list_next;
+	mine->list_next = my_used_nodes;
+	if(my_used_nodes!=NULL){my_used_nodes->list_prev = mine;}
+	my_used_nodes = mine;
+	mine->list_prev = NULL;
+
+	return 0; // return success
+}
+
+static int mcs_lock(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,false);
+}
+
+
+static int mcs_trylock(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,true);
+}
+
+static int mcs_unlock(mcs_lock_t *lk) {
+	
+	// traverse used list to find node
+	// (assumes we never hold a lot of locks at once)
+	mcs_node_t* mine = my_used_nodes;	
+	assert(mine!=NULL);
+	while(mine->lock!=lk){
+		mine = mine->list_next;
+		assert(mine!=NULL);
+	}	
+
+	// if my node is the only one, then if I can zero the lock, do so and I'm
+	// done
+	if (mine->lock_next == NULL) {
+		if (__sync_bool_compare_and_swap(&lk->tail, mine, NULL))
+			return 0;
+		// uh-oh, someone arrived while I was zeroing... wait for arriver to
+		// initialize, fall out to other case
+		while (mine->lock_next == NULL) { } // spin
+	}
+	// other case: someone is waiting on me... set their flag to let them start
+	mine->lock_next->wait = false;
+
+
+	// move node out of used list
+	mine->lock_next = NULL;
+	if(mine->list_prev!=NULL){mine->list_prev->list_next = mine->list_next;}
+	else{my_used_nodes->list_next = mine->list_next;}
+
+	// and onto free list
+	mine->list_next = my_free_nodes;
+	my_free_nodes = mine;
+
+	return 0;
+}
+
+
 
 // function dispatch =========================
 //
@@ -295,6 +427,7 @@ static lock_type_t lock_types[] = {
 //    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
     {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock}, 
     {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm}, 
+    {"mcs",   sizeof(mcs_lock_t), (txlock_func_t)mcs_lock, (txlock_func_t)mcs_trylock, (txlock_func_t)mcs_unlock}, 
 };
 
 static lock_type_t *using_lock_type = &lock_types[2];
@@ -346,7 +479,7 @@ static void init_lib_txlock() {
     func_tl_unlock = using_lock_type->unlock_fun;
 
 
-    fprintf(stderr, "LIBTXLOCK2: %s\n", using_lock_type->name);
+    fprintf(stderr, "LIBTXLOCK: %s\n", using_lock_type->name);
     fflush(stderr);
 }
 
