@@ -16,14 +16,11 @@ tl-pthread.so: tl-pthread.c txlock.so
 	gcc $(CFLAGS) -fPIC -flto -c tl-pthread.c -o tl-pthread.o
 	gcc -flto -shared tl-pthread.o txlock.so -ldl -o $@
 
-txlock.so: txlock.c txlock.h	
+txlock.so: txlock.c txlock.h
 	gcc $(CFLAGS) -fPIC -flto -c txlock.c -o txlock.so
 
-txlock.o: txlock.c txlock.h	
+txlock.o: txlock.c txlock.h
 	gcc $(CFLAGS) -c -flto txlock.c -o txlock.o
 
-test: test.c
-	gcc $(CFLAGS) $(LIBTXLOCK_CFLAGS) test.c $(LIBTXLOCK_LDFLAGS) -o $@
-
 clean:
-	$(RM) *.o *.so *.a test
+	$(RM) *.o *.so *.a
