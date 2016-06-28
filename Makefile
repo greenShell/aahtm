@@ -4,7 +4,7 @@ LIBSYNC_PATH=../libsync
 LIBHTM_PATH=../libhtm
 CFLAGS = -g -std=c11 -O3 -mrtm $(LIBTXLOCK_CFLAGS) -I$(LIBSYNC_PATH) -I$(LIBHTM_PATH) -D_POSIX_C_SOURCE=200112L
 
-all: tl-pthread.so libtxlock.so libtxlock.a test
+all: tl-pthread.so libtxlock.so libtxlock.a
 
 libtxlock.so: txlock.so
 	gcc -shared txlock.so -ldl -o $@

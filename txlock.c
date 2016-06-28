@@ -60,7 +60,13 @@ static void (*libpthread_exit)(void *) = 0;
 
 // State for HTM speculation
 static __thread void * volatile spec_lock = 0;
-//static __thread int spec_lock_recursive = 0;
+int MIN_DISTANCE = 0;
+int MAX_DISTANCE = 2;
+int NUM_TRIES = 4;
+
+// thread local counters
+static __thread int spec_lock_recursive = 0;
+
 
 // ASM optimized synchronization
 #if defined(__powerpc__) || defined(__powerpc64__)
@@ -120,22 +126,16 @@ static int tas_unlock(tas_lock_t *l) {
 static int tas_lock_tm(tas_lock_t *l) {
 	if (spec_lock == 0) { // not in HTM
 		if (tatas(&l->val, 1)) {
-			int tries = 0;
-			//int order = __sync_fetch_and_add(&l->count, 1);
+			// if lock is held, start speculating
 			int s = spin_begin();
 			spec_lock = l;
-			if (tries < 3 && HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
-				//      if (order==0)
-				//          spec_lock_recursive = l->val;
+			if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 				return 0;
 			}
-			tries++;
+			// else, contend for the lock
 			spec_lock = 0;
-
-            while (tatas(&l->val, 1))
-                s = spin_wait(s);
-
-			//__sync_fetch_and_sub(&l->count, 1);
+			while (tatas(&l->val, 1))
+				s = spin_wait(s); 
 		}
 	} else if (spec_lock == l) {
 			//spec_lock_recursive++;
@@ -144,32 +144,29 @@ static int tas_lock_tm(tas_lock_t *l) {
 }
 
 static int tas_trylock_tm(tas_lock_t *l) {
-    if (spec_lock == 0) { // not in HTM
-        return tatas(&l->val, 1);
-    } else if (spec_lock == l) {
-        //spec_lock_recursive++;
-    }
-    return 0;
+	if (spec_lock == 0) { // not in HTM
+		return tatas(&l->val, 1);
+	} else if (spec_lock == l) {
+		//spec_lock_recursive++;
+	}
+	return 0;
 }
 
 static int tas_unlock_tm(tas_lock_t *l) {
-    if (spec_lock) { // in htm
-    //   if (spec_lock == l) {
-    //       if (--spec_lock_recursive==0)
-    //            HTM_ABORT(7);
-    //   }
-    } else { // not in HTM
-        __sync_lock_release(&l->val);
-    }
-    return 0;
+	if (spec_lock) { // in htm 
+	} 
+	else { // not in HTM
+		  __sync_lock_release(&l->val);
+	}
+	return 0;
 }
 
 // ticket lock =========================
 //
 
 struct _ticket_lock_t {
-    volatile uint32_t next;
-    volatile uint32_t now;
+	volatile uint32_t next;
+	volatile uint32_t now;
 } __attribute__((__packed__));
 
 typedef struct _ticket_lock_t ticket_lock_t;
@@ -208,8 +205,9 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
-        if (dist <= 2 && tries < 4) {
-            spin_wait(8);
+        if (dist <= MAX_DISTANCE &&
+				 dist >= MIN_DISTANCE && NUM_TRIES < 4) {
+            spin_wait(8); 
             spec_lock = l;
             if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
             //    if (dist==1)
@@ -285,6 +283,136 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
     return 0;
 }
 
+// queue lock ================================
+struct _mcs_lock_t;
+
+struct _mcs_node_t{
+	volatile struct _mcs_node_t* lock_next;
+	volatile bool wait;
+	volatile uint64_t cnt;
+	struct _mcs_node_t* list_next;
+	struct _mcs_node_t* list_prev;
+	struct _mcs_lock_t* lock;
+} __attribute__((__packed__));
+
+typedef struct _mcs_node_t mcs_node_t;
+
+static __thread mcs_node_t* my_free_nodes = NULL;
+static __thread mcs_node_t* my_used_nodes = NULL;
+
+struct _mcs_lock_t {
+  volatile mcs_node_t* tail;
+} __attribute__((__packed__));
+
+typedef struct _mcs_lock_t mcs_lock_t;
+
+static void alloc_more_nodes(){
+	const int NUM_NODES = 8;
+	mcs_node_t* nodes = malloc(sizeof(mcs_node_t)*NUM_NODES);
+	assert(nodes!=NULL);
+	for(int i = 0; i<NUM_NODES; i++){
+		nodes[i].list_next = &nodes[i+1];
+		nodes[i].list_prev=NULL;
+		nodes[i].wait = true;
+		nodes[i].lock = NULL;
+		nodes[i].lock_next=NULL;
+		nodes[i].cnt = 0;
+	}
+	nodes[NUM_NODES-1].list_next=NULL;
+	my_free_nodes = nodes;
+}
+
+static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
+  if (spec_lock){return 0;}
+
+	// get a free node
+	mcs_node_t* mine;
+	mine = my_free_nodes;
+	if(mine == NULL){
+		alloc_more_nodes();
+		mine = my_free_nodes;
+		assert(mine!=NULL);
+	}	
+
+  // init my qnode
+  mine->lock_next = NULL;
+	mine->lock = lk;
+	mine->wait = true;
+
+	// then swap it into the root pointer
+	mcs_node_t* pred = NULL;
+	if(try_lock){
+		if(!__sync_bool_compare_and_swap(&lk->tail, NULL, mine)){
+			return 1; // return failure
+		}
+	}
+	else{
+	  pred = (mcs_node_t*)__sync_lock_test_and_set(&lk->tail, mine);
+	}
+
+	// now set my flag, point pred to me, and wait for my flag to be unset
+	if (pred != NULL) {
+		mine->wait = true;
+		pred->lock_next = mine;
+		while (mine->wait) {} // spin
+	}
+
+	// move node off free list and to used list
+	my_free_nodes = mine->list_next;
+	mine->list_next = my_used_nodes;
+	if(my_used_nodes!=NULL){my_used_nodes->list_prev = mine;}
+	my_used_nodes = mine;
+	mine->list_prev = NULL;
+
+	return 0; // return success
+}
+
+static int mcs_lock(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,false);
+}
+
+
+static int mcs_trylock(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,true);
+}
+
+static int mcs_unlock(mcs_lock_t *lk) {
+	
+	// traverse used list to find node
+	// (assumes we never hold a lot of locks at once)
+	mcs_node_t* mine = my_used_nodes;	
+	assert(mine!=NULL);
+	while(mine->lock!=lk){
+		mine = mine->list_next;
+		assert(mine!=NULL);
+	}	
+
+	// if my node is the only one, then if I can zero the lock, do so and I'm
+	// done
+	if (mine->lock_next == NULL) {
+		if (__sync_bool_compare_and_swap(&lk->tail, mine, NULL))
+			return 0;
+		// uh-oh, someone arrived while I was zeroing... wait for arriver to
+		// initialize, fall out to other case
+		while (mine->lock_next == NULL) { } // spin
+	}
+	// other case: someone is waiting on me... set their flag to let them start
+	mine->lock_next->wait = false;
+
+
+	// move node out of used list
+	mine->lock_next = NULL;
+	if(mine->list_prev!=NULL){mine->list_prev->list_next = mine->list_next;}
+	else{my_used_nodes->list_next = mine->list_next;}
+
+	// and onto free list
+	mine->list_next = my_free_nodes;
+	my_free_nodes = mine;
+
+	return 0;
+}
+
+
 
 // function dispatch =========================
 //
@@ -299,13 +427,14 @@ struct _lock_type_t {
 typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
-    {"pthread",     sizeof(pthread_mutex_t), NULL, NULL, NULL},
-    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock_tm, (txlock_func_t)pthread_trylock_tm, (txlock_func_t)pthread_unlock_tm},
-    {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock},
-    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm},
-//    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle},
-    {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock},
-    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm},
+    {"pthread",     sizeof(pthread_mutex_t), NULL, NULL, NULL}, 
+    {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock_tm, (txlock_func_t)pthread_trylock_tm, (txlock_func_t)pthread_unlock_tm}, 
+    {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock}, 
+    {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm}, 
+//    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle}, 
+    {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock}, 
+    {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm}, 
+    {"mcs",   sizeof(mcs_lock_t), (txlock_func_t)mcs_lock, (txlock_func_t)mcs_trylock, (txlock_func_t)mcs_unlock}, 
 };
 
 static lock_type_t *using_lock_type = &lock_types[2];
@@ -340,9 +469,9 @@ static void setup_pthread_funcs() {
 __attribute__((constructor(201)))  // after tl-pthread.so
 static void init_lib_txlock() {
     setup_pthread_funcs();
-
-	// determine lock type
-    const char *type = getenv("LIBTXLOCK");
+ 
+		// determine lock type
+    const char *type = getenv("LIBTXLOCK_LOCK");
     if (type) {
         for (size_t i=0; i<sizeof(lock_types)/sizeof(lock_type_t); i++) {
             if (strcmp(type, lock_types[i].name) == 0) {
@@ -357,7 +486,14 @@ static void init_lib_txlock() {
     func_tl_trylock = using_lock_type->trylock_fun;
     func_tl_unlock = using_lock_type->unlock_fun;
 
-    fprintf(stderr, "LIBTXLOCK2: %s\n", using_lock_type->name);
+		// read auxiliary arguments
+    MAX_DISTANCE = atoi(getenv("LIBTXLOCK_MAX_DISTANCE"));
+    MIN_DISTANCE = atoi(getenv("LIBTXLOCK_MIN_DISTANCE"));
+    NUM_TRIES = atoi(getenv("LIBTXLOCK_NUM_TRIES"));
+
+
+		// notify user of arguments
+    fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
     fflush(stderr);
 }
 
