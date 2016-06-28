@@ -78,9 +78,9 @@ static const char* LIBPTHREAD_PATH = "libpthread.so.0"; // without specifying th
 static void *libpthread_handle = 0;
 
 // ticket_tm parameters
-static uint32_t TIX_MIN_DISTANCE = 0;
-static uint32_t TIX_MAX_DISTANCE = 2;
-static uint32_t TIX_NUM_TRIES    = 4;
+static uint32_t TK_MIN_DISTANCE = 0;
+static uint32_t TK_MAX_DISTANCE = 2;
+static uint32_t TK_NUM_TRIES    = 4;
 
 // Function pointers used to dispatch lock methods
 typedef int (*txlock_func_t)(txlock_t *);
@@ -253,7 +253,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
-        if (dist <= TIX_MAX_DISTANCE && dist >= TIX_MIN_DISTANCE && tries < TIX_NUM_TRIES) {
+        if (dist <= TK_MAX_DISTANCE && dist >= TK_MIN_DISTANCE && tries < TK_NUM_TRIES) {
             TM_STATS_ADD(my_tm_stats.tries, 1);
             TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
             spec_lock = l;
@@ -551,9 +551,9 @@ static void init_lib_txlock() {
     func_tl_unlock = using_lock_type->unlock_fun;
 
 		// read auxiliary arguments
-    TIX_MAX_DISTANCE = atoi(getenv("LIBTXLOCK_MAX_DISTANCE"));
-    TIX_MIN_DISTANCE = atoi(getenv("LIBTXLOCK_MIN_DISTANCE"));
-    TIX_NUM_TRIES = atoi(getenv("LIBTXLOCK_NUM_TRIES"));
+    TK_MAX_DISTANCE = atoi(getenv("LIBTXLOCK_MAX_DISTANCE"));
+    TK_MIN_DISTANCE = atoi(getenv("LIBTXLOCK_MIN_DISTANCE"));
+    TK_NUM_TRIES = atoi(getenv("LIBTXLOCK_NUM_TRIES"));
 
 
 	    // notify user of arguments
