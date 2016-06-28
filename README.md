@@ -11,8 +11,8 @@
 If a program has its own lock implementation, you can replace lock/unlock with
 `tl_*`, `tc_*` functions in `txlock.h`.
 
-`txlock` itself is an abstract lock. By setting `LIBTXLOCK` env variable, you 
-can specify the type of lock you want to use internally for txlock. Current 
+`txlock` itself is an abstract lock. By setting `LIBTXLOCK` env variable, you
+can specify the type of lock you want to use internally for txlock. Current
 options (in `txlock.c`) are:
 
 - `tas`: basic tatas lock. It's the default choice if `LIBTXLOCK` is not set.
@@ -29,8 +29,8 @@ appB # use pthread lock for appB
 ```
 ### tl-pthread.so
 
-Assuming `app.bin` is a program compiled with default pthread library, running 
-`app.bin` with command line: `LD_PRELOAD=path/tl-pthread.so app.bin args` will 
+Assuming `app.bin` is a program compiled with default pthread library, running
+`app.bin` with command line: `LD_PRELOAD=path/tl-pthread.so app.bin args` will
 dynamicly replace the following pthread functions with ours (in `tl-pthread.h`):
 
 - pthread_mutex_*
