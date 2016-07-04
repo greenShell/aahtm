@@ -551,9 +551,11 @@ static void init_lib_txlock() {
     func_tl_unlock = using_lock_type->unlock_fun;
 
 		// read auxiliary arguments
-    TK_MAX_DISTANCE = atoi(getenv("LIBTXLOCK_MAX_DISTANCE"));
-    TK_MIN_DISTANCE = atoi(getenv("LIBTXLOCK_MIN_DISTANCE"));
-    TK_NUM_TRIES = atoi(getenv("LIBTXLOCK_NUM_TRIES"));
+		char* env;
+		env = getenv("LIBTXLOCK_MAX_DISTANCE");
+    env?TK_MAX_DISTANCE=atoi(env):2;
+    env?TK_MIN_DISTANCE=atoi(env):0;
+    env?TK_NUM_TRIES=atoi(env):4;
 
 
 	    // notify user of arguments
@@ -580,7 +582,7 @@ void __tl_pthread_exit(void *retval)
 __attribute__((destructor))
 static void uninit_lib_txlock()
 {
-    fprintf(stderr, "LIBTXLOCK: %s", using_lock_type->name);
+    fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
     if (tm_stats.tries) {
         fprintf(stderr, ", avg_lock_cycles: %d, locks: %d, avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d",
                         (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks,
