@@ -455,12 +455,13 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 				while(true){
 					i = 0;
 					current = mine;
+					dist_min = NULL; dist_max = NULL;
 					while(true){
 						if(current == NULL){retry = false; break;}
 						if(current == (void*)1){retry = true; break;}
 						if(current->lock != lk){retry = true; break;}
-						if(current->lock_next!=old){retry = true; break;}
-						if(current->cnt+i != mine->cnt){retry = true; break;}
+						if(current != mine && current->lock_next!=old){retry = true; break;}
+						if(current->cnt+i != cnt){retry = true; break;}
 						if(current->wait == false){retry = false; break;}
 						if(i==TK_MIN_DISTANCE){
 							dist_min = current;
@@ -503,7 +504,10 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 		}
 	}
 	else{
-		if(tm){mine->lock_prev=NULL;}
+		if(tm){
+			mine->cnt++;
+			mine->lock_prev=NULL;
+		}
 	}
 
 	return 0; // return success
