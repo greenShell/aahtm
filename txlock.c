@@ -414,14 +414,24 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 	  pred = (mcs_node_t*)__sync_lock_test_and_set(&lk->tail, mine);
 	}
 
+	// we know we'll use the node, so allocate it
+	// by moving node off free list and to used list
+	my_free_nodes = mine->list_next;
+	mine->list_next = my_used_nodes;
+	if(my_used_nodes!=NULL){my_used_nodes->list_prev = mine;}
+	my_used_nodes = mine;
+	mine->list_prev = NULL;
+
 	// now set my flag, point pred to me, and wait for my flag to be unset
 	if (pred != NULL) {
+		puts("MCS");
 		if(!tm){
 			pred->lock_next = mine;
 			__sync_synchronize(); // is this barrier needed?
 			while (mine->wait) {} // spin
 		}
 		else{
+			puts("TM");
 			// ensure predecessor finishes enqueing
 			while(pred->lock_prev == (void*)1){}
 			__sync_synchronize(); // acquire
@@ -431,8 +441,9 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 			__sync_synchronize(); // release
 			mine->lock_prev = pred;
 
-			if(!mine->wait){
+			if(mine->wait){
 
+				puts("wait");
 				// figure out who to wait for
 				mcs_node_t* current = NULL;
 				mcs_node_t* old = NULL;
@@ -470,16 +481,19 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 
 				// wait to start TM
 				if(dist_max != NULL){
+					puts("max");
 					while(dist_max->wait == true){}				
 				}
 				// start TM
 				if(dist_min!=NULL && mine->wait==true){
+					puts("min");
 					if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 						if(!mine->wait || 
 						 !dist_min->wait || 
 						 dist_min->lock!=lk ||
 						 dist_min->cnt!=cnt-TK_MIN_DISTANCE){HTM_ABORT(0);}
-						// move node to used list?						
+						// move node to used list?	
+						spec_lock = lk;					
 						return 0;
 					}
 				}
@@ -488,13 +502,9 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 			} // end waiting
 		}
 	}
-
-	// move node off free list and to used list
-	my_free_nodes = mine->list_next;
-	mine->list_next = my_used_nodes;
-	if(my_used_nodes!=NULL){my_used_nodes->list_prev = mine;}
-	my_used_nodes = mine;
-	mine->list_prev = NULL;
+	else{
+		if(tm){mine->lock_prev=NULL;}
+	}
 
 	return 0; // return success
 }
@@ -507,6 +517,7 @@ static int mcs_lock(mcs_lock_t *lk) {
 static int mcs_trylock(mcs_lock_t *lk) {
 	return mcs_lock_common(lk,true,false);
 }
+
 
 static int mcs_unlock(mcs_lock_t *lk) {
 
@@ -545,6 +556,20 @@ static int mcs_unlock(mcs_lock_t *lk) {
 }
 
 
+static int mcs_lock_tm(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,false,true);
+}
+
+
+static int mcs_trylock_tm(mcs_lock_t *lk) {
+	return mcs_lock_common(lk,true,true);
+}
+
+static int mcs_unlock_tm(mcs_lock_t *lk) {
+	if(!spec_lock){return mcs_unlock(lk);}
+	else{return 0;}
+}
+
 
 // function dispatch =========================
 //
@@ -567,6 +592,7 @@ static lock_type_t lock_types[] = {
     {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock},
     {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm},
     {"mcs",   sizeof(mcs_lock_t), (txlock_func_t)mcs_lock, (txlock_func_t)mcs_trylock, (txlock_func_t)mcs_unlock},
+    {"mcs_tm",   sizeof(mcs_lock_t), (txlock_func_t)mcs_lock_tm, (txlock_func_t)mcs_trylock_tm, (txlock_func_t)mcs_unlock_tm}
 };
 
 static lock_type_t *using_lock_type = &lock_types[2];
