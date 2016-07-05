@@ -348,12 +348,13 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
 struct _mcs_lock_t;
 
 struct _mcs_node_t{
-	volatile struct _mcs_node_t* lock_next;
+	struct _mcs_node_t* volatile lock_next;
+	struct _mcs_node_t* volatile lock_prev;
+	struct _mcs_lock_t* volatile lock;
 	volatile bool wait;
 	volatile uint64_t cnt;
 	struct _mcs_node_t* list_next;
 	struct _mcs_node_t* list_prev;
-	struct _mcs_lock_t* lock;
 } __attribute__((__packed__));
 
 typedef struct _mcs_node_t mcs_node_t;
@@ -377,13 +378,14 @@ static void alloc_more_nodes(){
 		nodes[i].wait = true;
 		nodes[i].lock = NULL;
 		nodes[i].lock_next=NULL;
+		nodes[i].lock_prev=NULL;
 		nodes[i].cnt = 0;
 	}
 	nodes[NUM_NODES-1].list_next=NULL;
 	my_free_nodes = nodes;
 }
 
-static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
+static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
   if (spec_lock){return 0;}
 
 	// get a free node
@@ -399,6 +401,7 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
   mine->lock_next = NULL;
 	mine->lock = lk;
 	mine->wait = true;
+	mine->lock_prev = (void*)1;
 
 	// then swap it into the root pointer
 	mcs_node_t* pred = NULL;
@@ -413,9 +416,77 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
 
 	// now set my flag, point pred to me, and wait for my flag to be unset
 	if (pred != NULL) {
-		mine->wait = true;
-		pred->lock_next = mine;
-		while (mine->wait) {} // spin
+		if(!tm){
+			pred->lock_next = mine;
+			__sync_synchronize(); // is this barrier needed?
+			while (mine->wait) {} // spin
+		}
+		else{
+			// ensure predecessor finishes enqueing
+			while(pred->lock_prev == (void*)1){}
+			__sync_synchronize(); // acquire
+			pred->lock_next = mine;
+			int cnt = pred->cnt+1;
+			mine->cnt = cnt;
+			__sync_synchronize(); // release
+			mine->lock_prev = pred;
+
+			if(!mine->wait){
+
+				// figure out who to wait for
+				mcs_node_t* current = NULL;
+				mcs_node_t* old = NULL;
+				mcs_node_t* dist_max = NULL;
+				mcs_node_t* dist_min = NULL;
+				int i;
+				bool retry = true;
+				// start snapshot
+				while(true){
+					i = 0;
+					current = mine;
+					while(true){
+						if(current == NULL){retry = false; break;}
+						if(current == (void*)1){retry = true; break;}
+						if(current->lock != lk){retry = true; break;}
+						if(current->lock_next!=old){retry = true; break;}
+						if(current->cnt+i != mine->cnt){retry = true; break;}
+						if(current->wait == false){retry = false; break;}
+						if(i==TK_MIN_DISTANCE){
+							dist_min = current;
+						}
+						if(i==TK_MAX_DISTANCE){
+							dist_max = current;
+							retry = false;
+							break;
+						}
+						old = current;
+						current = current->lock_prev;
+						i++;
+					}
+					if(!retry){break;}
+				}	
+
+				// wait as necessary
+
+				// wait to start TM
+				if(dist_max != NULL){
+					while(dist_max->wait == true){}				
+				}
+				// start TM
+				if(dist_min!=NULL && mine->wait==true){
+					if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+						if(!mine->wait || 
+						 !dist_min->wait || 
+						 dist_min->lock!=lk ||
+						 dist_min->cnt!=cnt-TK_MIN_DISTANCE){HTM_ABORT(0);}
+						// move node to used list?						
+						return 0;
+					}
+				}
+				// actually wait
+				while (mine->wait) {}
+			} // end waiting
+		}
 	}
 
 	// move node off free list and to used list
@@ -429,12 +500,12 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock) {
 }
 
 static int mcs_lock(mcs_lock_t *lk) {
-	return mcs_lock_common(lk,false);
+	return mcs_lock_common(lk,false,false);
 }
 
 
 static int mcs_trylock(mcs_lock_t *lk) {
-	return mcs_lock_common(lk,true);
+	return mcs_lock_common(lk,true,false);
 }
 
 static int mcs_unlock(mcs_lock_t *lk) {
@@ -554,9 +625,10 @@ static void init_lib_txlock() {
 		char* env;
 		env = getenv("LIBTXLOCK_MAX_DISTANCE");
     env?TK_MAX_DISTANCE=atoi(env):2;
+		env = getenv("LIBTXLOCK_MIN_DISTANCE");
     env?TK_MIN_DISTANCE=atoi(env):0;
+		env = getenv("LIBTXLOCK_NUM_TRIES");
     env?TK_NUM_TRIES=atoi(env):4;
-
 
 	    // notify user of arguments
     fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
