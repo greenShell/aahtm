@@ -486,8 +486,15 @@ static int mcs_trylock(mcs_lock_t *lk) {
 static inline void dealloc_node(mcs_node_t* mine){
 	// move node out of used list
 	mine->lock_next = NULL;
-	if(mine->list_prev!=NULL){mine->list_prev->list_next = mine->list_next;}
-	else{my_used_nodes->list_next = mine->list_next;}
+	if(mine->list_prev!=NULL){
+		mine->list_prev->list_next = mine->list_next;
+	}
+	else{
+		my_used_nodes->list_next = mine->list_next;
+	}
+	if(mine->list_next!=NULL){
+		mine->list_next->list_prev = mine->list_prev;
+	}
 
 	// and onto free list
 	mine->list_next = my_free_nodes;
