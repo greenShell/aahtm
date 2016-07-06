@@ -398,10 +398,12 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 		assert(mine!=NULL);
 	}
 
-  // init my qnode
-  mine->lock_next = NULL;
+	// init my qnode
+	mine->lock_next = NULL;
 	mine->lock = lk;
 	mine->wait = true;
+	mine->speculate = true;
+	mine->cnt = 0;
 
 	// then swap it into the root pointer
 	mcs_node_t* pred = NULL;
@@ -424,14 +426,12 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 
 	// now set my flag, point pred to me, and wait for my flag to be unset
 	if (pred != NULL) {
-		puts("MCS");
 		if(!tm){
 			pred->lock_next = mine;
 			__sync_synchronize(); // is this barrier needed?
 			while (mine->wait) {} // spin
 		}
 		else{
-			puts("TM");
 			// finish enqueing
 			pred->lock_next = mine;
 			while(pred->cnt==0){} // wait for predecessor to get its count
