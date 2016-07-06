@@ -349,10 +349,10 @@ struct _mcs_lock_t;
 
 struct _mcs_node_t{
 	struct _mcs_node_t* volatile lock_next;
-	struct _mcs_node_t* volatile lock_prev;
-	struct _mcs_lock_t* volatile lock;
 	volatile bool wait;
+	volatile bool speculate;
 	volatile uint64_t cnt;
+	struct _mcs_lock_t* lock;
 	struct _mcs_node_t* list_next;
 	struct _mcs_node_t* list_prev;
 } __attribute__((__packed__));
@@ -364,6 +364,7 @@ static __thread mcs_node_t* my_used_nodes = NULL;
 
 struct _mcs_lock_t {
   volatile mcs_node_t* tail;
+	volatile long now_serving;
 } __attribute__((__packed__));
 
 typedef struct _mcs_lock_t mcs_lock_t;
@@ -376,16 +377,16 @@ static void alloc_more_nodes(){
 		nodes[i].list_next = &nodes[i+1];
 		nodes[i].list_prev=NULL;
 		nodes[i].wait = true;
+		nodes[i].speculate = true;
 		nodes[i].lock = NULL;
 		nodes[i].lock_next=NULL;
-		nodes[i].lock_prev=NULL;
 		nodes[i].cnt = 0;
 	}
 	nodes[NUM_NODES-1].list_next=NULL;
 	my_free_nodes = nodes;
 }
 
-static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
+static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
   if (spec_lock){return 0;}
 
 	// get a free node
@@ -401,7 +402,6 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
   mine->lock_next = NULL;
 	mine->lock = lk;
 	mine->wait = true;
-	mine->lock_prev = (void*)1;
 
 	// then swap it into the root pointer
 	mcs_node_t* pred = NULL;
@@ -432,81 +432,38 @@ static int mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 		}
 		else{
 			puts("TM");
-			// ensure predecessor finishes enqueing
-			while(pred->lock_prev == (void*)1){}
-			__sync_synchronize(); // acquire
+			// finish enqueing
 			pred->lock_next = mine;
-			int cnt = pred->cnt+1;
+			while(pred->cnt==0){} // wait for predecessor to get its count
+			__sync_synchronize(); // is this barrier needed?
+			long cnt = pred->cnt+1;
 			mine->cnt = cnt;
-			__sync_synchronize(); // release
-			mine->lock_prev = pred;
+			__sync_synchronize(); // is this barrier needed?
 
-			if(mine->wait){
-
-				puts("wait");
-				// figure out who to wait for
-				mcs_node_t* current = NULL;
-				mcs_node_t* old = NULL;
-				mcs_node_t* dist_max = NULL;
-				mcs_node_t* dist_min = NULL;
-				int i;
-				bool retry = true;
-				// start snapshot
-				while(true){
-					i = 0;
-					current = mine;
-					dist_min = NULL; dist_max = NULL;
-					while(true){
-						if(current == NULL){retry = false; break;}
-						if(current == (void*)1){retry = true; break;}
-						if(current->lock != lk){retry = true; break;}
-						if(current != mine && current->lock_next!=old){retry = true; break;}
-						if(current->cnt+i != cnt){retry = true; break;}
-						if(current->wait == false){retry = false; break;}
-						if(i==TK_MIN_DISTANCE){
-							dist_min = current;
-						}
-						if(i==TK_MAX_DISTANCE){
-							dist_max = current;
-							retry = false;
-							break;
-						}
-						old = current;
-						current = current->lock_prev;
-						i++;
-					}
-					if(!retry){break;}
-				}	
-
-				// wait as necessary
-
-				// wait to start TM
-				if(dist_max != NULL){
-					puts("max");
-					while(dist_max->wait == true){}				
+			// decide whether to speculate
+			long now_serving_copy = lk->now_serving;
+			if(now_serving_copy<cnt-TK_MIN_DISTANCE && 
+			 now_serving_copy>cnt-TK_MAX_DISTANCE){
+				spec_lock = lk;
+				if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+					if(mine->speculate!=true || mine->wait!=true){
+						HTM_ABORT(0);
+					}					
+					else{return 0;}
 				}
-				// start TM
-				if(dist_min!=NULL && mine->wait==true){
-					puts("min");
-					if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
-						if(!mine->wait || 
-						 !dist_min->wait || 
-						 dist_min->lock!=lk ||
-						 dist_min->cnt!=cnt-TK_MIN_DISTANCE){HTM_ABORT(0);}
-						// move node to used list?	
-						spec_lock = lk;					
-						return 0;
-					}
-				}
-				// actually wait
-				while (mine->wait) {}
-			} // end waiting
+			}
+			// finished speculating
+		
+			// actually acquire the lock
+			while (mine->wait) {}
+			__sync_synchronize(); // is this barrier needed?
+			assert(lk->now_serving == cnt-1);
+			lk->now_serving = cnt;
 		}
 	}
 	else{
 		if(tm){
-			mine->cnt++;
-			mine->lock_prev=NULL;
+			mine->cnt=lk->now_serving+1;
 		}
 	}
 
@@ -523,7 +480,7 @@ static int mcs_trylock(mcs_lock_t *lk) {
 }
 
 
-static int mcs_unlock(mcs_lock_t *lk) {
+static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 
 	// traverse used list to find node
 	// (assumes we never hold a lot of locks at once)
@@ -543,9 +500,24 @@ static int mcs_unlock(mcs_lock_t *lk) {
 		// initialize, fall out to other case
 		while (mine->lock_next == NULL) { } // spin
 	}
-	// other case: someone is waiting on me... set their flag to let them start
-	mine->lock_next->wait = false;
 
+	// halt speculators
+	if(tm){
+		mcs_node_t* current = mine->lock_next;
+		int dist = 1;
+		while(current!=NULL){
+			if(dist>=TK_MIN_DISTANCE){
+				current->speculate = false;
+			}
+			if(dist>TK_MAX_DISTANCE){break;}
+			current = current->lock_next;
+			dist++;
+		}
+	}
+
+	// if someone is waiting on me; set their flag to let them start
+	mine->lock_next->wait = false;
+		
 
 	// move node out of used list
 	mine->lock_next = NULL;
@@ -559,6 +531,10 @@ static int mcs_unlock(mcs_lock_t *lk) {
 	return 0;
 }
 
+static int mcs_unlock(mcs_lock_t *lk) {
+	return mcs_unlock_common(lk,false);
+}
+
 
 static int mcs_lock_tm(mcs_lock_t *lk) {
 	return mcs_lock_common(lk,false,true);
@@ -570,7 +546,7 @@ static int mcs_trylock_tm(mcs_lock_t *lk) {
 }
 
 static int mcs_unlock_tm(mcs_lock_t *lk) {
-	if(!spec_lock){return mcs_unlock(lk);}
+	if(!spec_lock){return mcs_unlock_common(lk,true);}
 	else{return 0;}
 }
 
