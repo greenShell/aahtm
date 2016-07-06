@@ -443,7 +443,8 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 			// decide whether to speculate
 			long now_serving_copy = lk->now_serving;
 			if(now_serving_copy<cnt-TK_MIN_DISTANCE && 
-			 now_serving_copy>cnt-TK_MAX_DISTANCE){
+			 now_serving_copy>cnt-TK_MAX_DISTANCE &&
+			 spec_lock==NULL){
 				spec_lock = lk;
 				if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 					if(mine->speculate!=true || mine->wait!=true){
@@ -451,6 +452,7 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 					}					
 					else{return 0;}
 				}
+				spec_lock=NULL;
 			}
 			// finished speculating
 		
@@ -464,6 +466,7 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 	else{
 		if(tm){
 			mine->cnt=lk->now_serving+1;
+			lk->now_serving++;
 		}
 	}
 
