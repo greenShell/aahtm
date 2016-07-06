@@ -483,6 +483,17 @@ static int mcs_trylock(mcs_lock_t *lk) {
 }
 
 
+static inline void dealloc_node(mcs_node_t* mine){
+	// move node out of used list
+	mine->lock_next = NULL;
+	if(mine->list_prev!=NULL){mine->list_prev->list_next = mine->list_next;}
+	else{my_used_nodes->list_next = mine->list_next;}
+
+	// and onto free list
+	mine->list_next = my_free_nodes;
+	my_free_nodes = mine;
+}
+
 static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 
 	// traverse used list to find node
@@ -497,8 +508,10 @@ static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 	// if my node is the only one, then if I can zero the lock, do so and I'm
 	// done
 	if (mine->lock_next == NULL) {
-		if (__sync_bool_compare_and_swap(&lk->tail, mine, NULL))
+		if (__sync_bool_compare_and_swap(&lk->tail, mine, NULL)){
+			dealloc_node(mine);
 			return 0;
+		}
 		// uh-oh, someone arrived while I was zeroing... wait for arriver to
 		// initialize, fall out to other case
 		while (mine->lock_next == NULL) { } // spin
@@ -520,16 +533,8 @@ static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 
 	// if someone is waiting on me; set their flag to let them start
 	mine->lock_next->wait = false;
-		
-
-	// move node out of used list
-	mine->lock_next = NULL;
-	if(mine->list_prev!=NULL){mine->list_prev->list_next = mine->list_next;}
-	else{my_used_nodes->list_next = mine->list_next;}
-
-	// and onto free list
-	mine->list_next = my_free_nodes;
-	my_free_nodes = mine;
+	
+	dealloc_node(mine);
 
 	return 0;
 }
