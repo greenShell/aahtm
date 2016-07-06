@@ -490,7 +490,7 @@ static inline void dealloc_node(mcs_node_t* mine){
 		mine->list_prev->list_next = mine->list_next;
 	}
 	else{
-		my_used_nodes->list_next = mine->list_next;
+		my_used_nodes = mine->list_next;
 	}
 	if(mine->list_next!=NULL){
 		mine->list_next->list_prev = mine->list_prev;
