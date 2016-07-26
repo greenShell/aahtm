@@ -8,6 +8,9 @@
 *.gcno
 test
 
+bench/uts-1.1/config.in
+bench/uts-1.1/uts-pthread
+
 bench/memcached-1.4.25/doc/Makefile
 bench/memcached-1.4.25/.deps
 bench/memcached-1.4.25/Makefile
