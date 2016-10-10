@@ -53,6 +53,7 @@ typedef struct _tm_stats_t {
     uint32_t stops;         // # of self-stop
     uint32_t overflows;     // overflow aborts
     uint32_t conflicts;     // conflict aborts
+    uint32_t threads;     // number of threads
 } __attribute__ ((aligned(64))) tm_stats_t;
 
 static __thread tm_stats_t my_tm_stats; // thread-local stats
@@ -719,6 +720,8 @@ void __tl_pthread_exit(void *retval)
     __sync_fetch_and_add(&tm_stats.stops, my_tm_stats.stops);
     __sync_fetch_and_add(&tm_stats.overflows, my_tm_stats.overflows);
     __sync_fetch_and_add(&tm_stats.conflicts, my_tm_stats.conflicts);
+    __sync_fetch_and_add(&tm_stats.threads, 1);
+
     // call real pthread function
     libpthread_exit(retval);
 }
@@ -728,14 +731,18 @@ __attribute__((destructor))
 static void uninit_lib_txlock()
 {
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
+    if (tm_stats.threads==0) {
+        fprintf(stderr,"\nWARNING: No threads exited properly! Unable to gather profiling information.  \
+Ensure all threads properly terminate using pthread_exit()");
+    }
     if (tm_stats.locks!=0) {
-        fprintf(stderr, ", avg_lock_cycles: %d, locks: %d, overflows: %d, conflicts: %d, stops: %d",
-                        (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks,
-                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
+        fprintf(stderr, ", avg_lock_cycles: %d, locks: %d",
+                        (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks);
     }
     if (tm_stats.tries!=0) {
-        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d",
-                        (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries);
+        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d",
+                        (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries,
+                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
