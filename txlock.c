@@ -363,26 +363,43 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
 static int pthread_lock_tm(pthread_mutex_t *l) {
   if (spec_lock){return 0;}
 
+  TM_STATS_ADD(my_tm_stats.locks, 1);
   int tries = 0;
   while (libpthread_mutex_trylock((void*)l) != 0) {
     spin_wait(8);
     spec_lock = l;
-    if (tries < HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+    TM_STATS_ADD(my_tm_stats.tries, 1);
+    int ret;
+    if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
       return 0;
     }
+    // abort
+    TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
+    if (HTM_IS_CONFLICT(ret))
+        TM_STATS_ADD(my_tm_stats.conflicts, 1);
+    else if (HTM_IS_OVERFLOW(ret))
+        TM_STATS_ADD(my_tm_stats.overflows, 1);
+    else // self aborts
+        ;
     spec_lock = 0;
     tries++;
   }
+  TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
   return 0;
 }
 
 static int pthread_trylock_tm(pthread_mutex_t *l) {
     if (spec_lock) { // in htm
         // nothing
+        return 0;
     } else { // not in HTM
-        libpthread_mutex_trylock((void*)l);
+        int retval = libpthread_mutex_trylock((void*)l);
+        if(retval==0){
+            TM_STATS_ADD(my_tm_stats.locks, 1);
+            TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        }
+        return retval;
     }
-    return 0;
 }
 
 static int pthread_unlock_tm(pthread_mutex_t *l) {
@@ -392,6 +409,7 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
        //}
     } else { // not in HTM
         libpthread_mutex_unlock((void*)l);
+        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
     }
     return 0;
 }
