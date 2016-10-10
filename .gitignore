@@ -6,6 +6,7 @@
 *.out
 *~
 *.gcno
+*.d
 test
 
 bench/uts-1.1/config.in
@@ -350,3 +351,5 @@ bench/libmemcached-1.0.18/tests/testhashkit
 bench/libmemcached-1.0.18/tests/testplus
 bench/libmemcached-1.0.18/tests/testudp
 
+bench/simple-mutex/bin/*
+bench/simple-mutex/obj/*
