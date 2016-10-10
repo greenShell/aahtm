@@ -105,6 +105,7 @@ static txlock_func_t libpthread_mutex_lock = 0;
 static txlock_func_t libpthread_mutex_trylock = 0;
 static txlock_func_t libpthread_mutex_unlock = 0;
 static void (*libpthread_exit)(void *) = 0;
+static int (*libpthread_create)(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg) = 0;
 
 
 // State for HTM speculation
@@ -666,9 +667,12 @@ static void setup_pthread_funcs() {
     lock_types[0].trylock_fun = libpthread_mutex_trylock;
     lock_types[0].unlock_fun = libpthread_mutex_unlock;
 
-    // handler for pthread_exit
+    // handler for pthread_exit and create
     libpthread_exit = (void (*)(void *))dlsym(handle, "pthread_exit");
-
+    
+    libpthread_create = (int (*)(pthread_t *thread, const pthread_attr_t *attr, 
+      void *(*start_routine) (void *), void *arg))dlsym(handle, "pthread_create");
+    
     if ((error = dlerror()) != NULL)  {
         fputs(error, stderr);
         exit(1);
@@ -709,6 +713,45 @@ static void init_lib_txlock() {
     fflush(stderr);
 }
 
+typedef struct {
+    void *(*routine) (void *);
+    void* args;
+} spawn_struct;
+
+void* __tl_dummy_thread_main(void *spec){
+    
+    // unwrap arguments
+    spawn_struct* orig = (spawn_struct*)spec;
+    void *(*start_routine) (void *); 
+    void * args;
+    
+    // call the actual desired function
+    void* ret = orig->routine(orig->args);
+   
+    // clean up spawn structure
+    free(orig);
+    
+    // sync local stats to the global stats
+    __sync_fetch_and_add(&tm_stats.cycles, my_tm_stats.cycles);
+    __sync_fetch_and_add(&tm_stats.tm_cycles, my_tm_stats.tm_cycles);
+    __sync_fetch_and_add(&tm_stats.locks, my_tm_stats.locks);
+    __sync_fetch_and_add(&tm_stats.tries, my_tm_stats.tries);
+    __sync_fetch_and_add(&tm_stats.stops, my_tm_stats.stops);
+    __sync_fetch_and_add(&tm_stats.overflows, my_tm_stats.overflows);
+    __sync_fetch_and_add(&tm_stats.conflicts, my_tm_stats.conflicts);
+    __sync_fetch_and_add(&tm_stats.threads, 1);
+
+    return ret;
+}
+
+int __tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *args){
+    // wrap arguments
+    spawn_struct* orig = malloc(sizeof(spawn_struct)); // destroyed by spawned thread
+    orig->routine = start_routine;
+    orig->args = args;
+    return libpthread_create(thread,attr,&__tl_dummy_thread_main,orig);
+}
+
 
 void __tl_pthread_exit(void *retval)
 {
@@ -734,6 +777,10 @@ static void uninit_lib_txlock()
     if (tm_stats.threads==0) {
         fprintf(stderr,"\nWARNING: No threads exited properly! Unable to gather profiling information.  \
 Ensure all threads properly terminate using pthread_exit()");
+    }
+    else{
+        fprintf(stderr, ", threads %d",
+            tm_stats.threads);
     }
     if (tm_stats.locks!=0) {
         fprintf(stderr, ", avg_lock_cycles: %d, locks: %d",

@@ -32,9 +32,6 @@ int tc_timedwait(txcond_t *cv, txlock_t *lk, const struct timespec *abs_timeout)
 int tc_signal(txcond_t* cv);
 int tc_broadcast(txcond_t* cv);
 
-// internal handler, shoud never be called inside a user app
-void __tl_pthread_exit(void *retval);
-
 #ifdef __cplusplus
 }
 #endif
