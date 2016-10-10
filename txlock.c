@@ -205,7 +205,7 @@ static int tas_lock_tm(tas_lock_t *l) {
       TM_STATS_ADD(my_tm_stats.tries, 1);
       TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
       int ret;
-      if (ret = HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+      if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
         return 0;
       }
       // abort
