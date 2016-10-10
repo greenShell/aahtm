@@ -147,21 +147,29 @@ static inline int tatas(volatile int32_t* val, int32_t v) {
 }
 
 static int tas_lock(tas_lock_t *l) {
+		TM_STATS_ADD(my_tm_stats.locks, 1);
     if (tatas(&l->val, 1)) {
         int s = spin_begin();
         do {
             s = spin_wait(s);
         } while (tatas(&l->val, 1));
     }
+		TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
     return 0;
 }
 
 static int tas_trylock(tas_lock_t *l) {
-    return tatas(&l->val, 1);
+    if(tatas(&l->val, 1) == 0){
+			TM_STATS_ADD(my_tm_stats.locks, 1);
+			TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+			return 0;
+		}
+		return 1;
 }
 
 static int tas_unlock(tas_lock_t *l) {
     __sync_lock_release(&l->val);
+		TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
     return 0;
 }
 
@@ -170,13 +178,26 @@ static int tas_unlock(tas_lock_t *l) {
 
 static int tas_lock_tm(tas_lock_t *l) {
 	if (spec_lock == 0) { // not in HTM
+		TM_STATS_ADD(my_tm_stats.locks, 1);
 		if (tatas(&l->val, 1)) {
 			// if lock is held, start speculating
 			int s = spin_begin();
 			spec_lock = l;
-			if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
+			TM_STATS_ADD(my_tm_stats.tries, 1);
+			TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
+			int ret;
+			if (ret = HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
 				return 0;
 			}
+			// abort
+			TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
+			if (HTM_IS_CONFLICT(ret))
+					TM_STATS_ADD(my_tm_stats.conflicts, 1);
+			else if (HTM_IS_OVERFLOW(ret))
+					TM_STATS_ADD(my_tm_stats.overflows, 1);
+			else // self aborts
+					;
+			
 			// else, contend for the lock
 			spec_lock = 0;
 			while (tatas(&l->val, 1))
@@ -185,12 +206,18 @@ static int tas_lock_tm(tas_lock_t *l) {
 	} else if (spec_lock == l) {
 			//spec_lock_recursive++;
 	}
+	TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
 	return 0;
 }
 
 static int tas_trylock_tm(tas_lock_t *l) {
 	if (spec_lock == 0) { // not in HTM
-		return tatas(&l->val, 1);
+		if(tatas(&l->val, 1)==0){
+			TM_STATS_ADD(my_tm_stats.locks, 1);
+			TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+			return 0;
+		}
+		else{return 1;}
 	} else if (spec_lock == l) {
 		//spec_lock_recursive++;
 	}
@@ -200,6 +227,7 @@ static int tas_trylock_tm(tas_lock_t *l) {
 static int tas_unlock_tm(tas_lock_t *l) {
 	if (spec_lock) { // in htm
     } else { // not in HTM
+				TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
         __sync_lock_release(&l->val);
 	}
 	return 0;
@@ -232,7 +260,12 @@ static int ticket_trylock(ticket_lock_t *l) {
     n.now = t.now;
     n.next = t.next+1;
 
-    return !(__sync_bool_compare_and_swap((int64_t*)l, *(int64_t*)&t, *(int64_t*)&n));
+    if((!(__sync_bool_compare_and_swap((int64_t*)l, *(int64_t*)&t, *(int64_t*)&n))) == 0){
+			TM_STATS_ADD(my_tm_stats.locks, 1);
+			TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+			return 0;
+		}
+		else{return 1;}
 }
 
 static int ticket_unlock(ticket_lock_t *l) {
@@ -537,6 +570,8 @@ static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 			dist++;
 		}
 	}
+	// wake spinners for speculation?????????
+
 
 	// if someone is waiting on me; set their flag to let them start
 	mine->lock_next->wait = false;
@@ -676,11 +711,14 @@ __attribute__((destructor))
 static void uninit_lib_txlock()
 {
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
-    if (tm_stats.tries) {
-        fprintf(stderr, ", avg_lock_cycles: %d, locks: %d, avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d",
+    if (tm_stats.locks!=0) {
+        fprintf(stderr, ", avg_lock_cycles: %d, locks: %d, overflows: %d, conflicts: %d, stops: %d",
                         (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks,
-                        (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries,
                         tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
+    }
+		if (tm_stats.tries!=0) {
+        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d",
+                        (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries);
     }
     fprintf(stderr, "\n");
     fflush(stderr);

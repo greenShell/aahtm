@@ -6,6 +6,7 @@
 *.out
 *~
 *.gcno
+*.d
 test
 
 bench/memcached-1.4.25/doc/Makefile
@@ -347,3 +348,5 @@ bench/libmemcached-1.0.18/tests/testhashkit
 bench/libmemcached-1.0.18/tests/testplus
 bench/libmemcached-1.0.18/tests/testudp
 
+bench/simple-mutex/bin/*
+bench/simple-mutex/obj/*
