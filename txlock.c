@@ -196,11 +196,11 @@ static int _tas_unlock(tas_lock_t *l) {
 //
 
 static int tas_lock_tm(tas_lock_t *l) {
+  int tries = 0;
   if (spec_lock == 0) { // not in HTM
     TM_STATS_ADD(my_tm_stats.locks, 1);
-    if (tatas(&l->val, 1)) {
+    while (tatas(&l->val, 1)) {
       // if lock is held, start speculating
-      int s = spin_begin();
       spec_lock = l;
       TM_STATS_ADD(my_tm_stats.tries, 1);
       TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
@@ -216,11 +216,15 @@ static int tas_lock_tm(tas_lock_t *l) {
           TM_STATS_ADD(my_tm_stats.overflows, 1);
       else // self aborts
           ;
-      
-      // else, contend for the lock
+
       spec_lock = 0;
-      while (tatas(&l->val, 1))
-        s = spin_wait(s);
+      tries++;
+      // fall to the lock if out of tries
+      if(tries>=TK_NUM_TRIES){
+        int s = spin_begin();
+        while (tatas(&l->val, 1)){s = spin_wait(s);}
+        break;
+      }
     }
   } else if (spec_lock == l) {
       //spec_lock_recursive++;
@@ -389,7 +393,6 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
   TM_STATS_ADD(my_tm_stats.locks, 1);
   int tries = 0;
   while (libpthread_mutex_trylock((void*)l) != 0) {
-    spin_wait(8);
     spec_lock = l;
     TM_STATS_ADD(my_tm_stats.tries, 1);
     TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
@@ -407,6 +410,11 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
         ;
     spec_lock = 0;
     tries++;
+
+    if(tries>=TK_NUM_TRIES){
+        libpthread_mutex_lock((void*)l);
+        break;
+    }
   }
   TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
   return 0;
