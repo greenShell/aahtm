@@ -356,6 +356,29 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
 }
 
 
+// pthreads =====================
+//
+
+static int pthread_lock(void *lk){
+    TM_STATS_ADD(my_tm_stats.locks, 1);
+    int retval = libpthread_mutex_lock(lk);
+    TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    return retval;
+}
+static int pthread_trylock(void *lk){
+    int retval = libpthread_mutex_trylock(lk);
+    if(retval==0){
+        TM_STATS_ADD(my_tm_stats.locks, 1);
+        TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    }
+    return retval;
+}
+static int pthread_unlock(void *lk){
+    int retval = libpthread_mutex_unlock(lk);
+    TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+    return retval;
+}
+
 
 // pthreads TM =========================
 //
@@ -369,6 +392,7 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
     spin_wait(8);
     spec_lock = l;
     TM_STATS_ADD(my_tm_stats.tries, 1);
+    TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
     int ret;
     if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
       return 0;
@@ -413,6 +437,8 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
     }
     return 0;
 }
+
+
 
 // queue lock ================================
 struct _mcs_lock_t;
@@ -651,7 +677,7 @@ struct _lock_type_t {
 typedef struct _lock_type_t lock_type_t;
 
 static lock_type_t lock_types[] = {
-    {"pthread",     sizeof(pthread_mutex_t), NULL, NULL, NULL},
+    {"pthread",     sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock, (txlock_func_t)pthread_trylock, (txlock_func_t)pthread_unlock},
     {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock_tm, (txlock_func_t)pthread_trylock_tm, (txlock_func_t)pthread_unlock_tm},
     {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock},
     {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm},
@@ -681,9 +707,9 @@ static void setup_pthread_funcs() {
     libpthread_mutex_unlock = (txlock_func_t)dlsym(handle, "pthread_mutex_unlock");
 
     // and store them in the lock_types array
-    lock_types[0].lock_fun = libpthread_mutex_lock;
-    lock_types[0].trylock_fun = libpthread_mutex_trylock;
-    lock_types[0].unlock_fun = libpthread_mutex_unlock;
+    //lock_types[0].lock_fun = libpthread_mutex_lock;
+    //lock_types[0].trylock_fun = libpthread_mutex_trylock;
+    //lock_types[0].unlock_fun = libpthread_mutex_unlock;
 
     // handler for pthread_exit and create
     libpthread_exit = (void (*)(void *))dlsym(handle, "pthread_exit");
