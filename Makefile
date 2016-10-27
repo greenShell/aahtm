@@ -2,23 +2,24 @@ include config.mk
 
 CFLAGS = -g -std=c11 -O3 -mrtm $(LIBTXLOCK_CFLAGS) -D_POSIX_C_SOURCE=200112L
 
+
+
 all: tl-pthread.so libtxlock.so libtxlock.a
 
-libtxlock.so: txlock.so
-	gcc -shared txlock.so -ldl -o $@
+libtxlock.so: txlock.s.o txcond.s.o txutil.s.o pthread_cond.s.o
+	gcc -shared $^ -ldl -o $@
 
-libtxlock.a: txlock.o
-	ar rcs $@ txlock.o
+libtxlock.a: txlock.o txcond.o txutil.o pthread_cond.o
+	ar rcs $@ $^
 
-tl-pthread.so: tl-pthread.c txlock.so
-	gcc $(CFLAGS) -fPIC -flto -c tl-pthread.c -o tl-pthread.o
-	gcc -flto -shared tl-pthread.o txlock.so -ldl -o $@
+tl-pthread.so: tl-pthread.s.o txlock.s.o txcond.s.o txutil.s.o pthread_cond.s.o
+	gcc -flto -shared $^ -ldl -o $@
 
-txlock.so: txlock.c txlock.h
-	gcc $(CFLAGS) -fPIC -flto -c txlock.c -o txlock.so
+%.s.o: %.c txlock.h txutil.h txcond.h
+	gcc $(CFLAGS) -fPIC -flto -c $< -o $@
 
-txlock.o: txlock.c txlock.h
-	gcc $(CFLAGS) -c -flto txlock.c -o txlock.o
+%.o: %.c txlock.h txutil.h txcond.h
+	gcc $(CFLAGS) -c -flto $< -o $@
 
 clean:
 	$(RM) *.o *.so *.a
