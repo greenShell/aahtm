@@ -27,6 +27,7 @@
 // link to txlock
 #include "txlock.h"
 #include "txcond.h"
+#include "txutil.h"
 #define __pthread_mutex_unlock_usercnt(mutex, cnt) tl_unlock((void*)mutex)
 #define __pthread_mutex_cond_lock(mutex)  tl_lock((void*)mutex)
 
@@ -698,6 +699,7 @@ __pthread_cond_wait (cond, mutex)
   /* Remember the broadcast counter.  */
   cbuffer.bc_seq = cond->__data.__broadcast_seq;
 
+  int tries = 0;
   do
     {
       unsigned int futex_val = cond->__data.__futex;
@@ -708,6 +710,15 @@ __pthread_cond_wait (cond, mutex)
       /* Enable asynchronous cancellation.  Required by the standard.  */
       cbuffer.oldtype = __pthread_enable_asynccancel ();
 
+      // speculate if futex is held
+      if(TM_COND_VARS && (tries < TK_NUM_TRIES) && (cond->__data.__futex == futex_val)){
+          if(enter_htm==0){return 0;}
+          else{
+            tries++;
+          }
+      }
+      
+      
       /* Wait until woken by signal or broadcast.  */
       lll_futex_wait (&cond->__data.__futex, futex_val, pshared);
 

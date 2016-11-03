@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <dlfcn.h>
+#include <stdbool.h>
 
 // for cond vars
 #include <time.h>
@@ -112,5 +113,34 @@ int inline ul_unlock(utility_lock_t *lk) {
 
 // State for HTM speculation (initialized in txutil.c)
 extern __thread void * volatile spec_entry;
+
+
+// how to enter HTM
+int inline enter_htm(void* primitive){
+    spec_entry = primitive;
+    int ret;
+    TM_STATS_ADD(my_tm_stats.tries, 1);
+    TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
+    if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
+        return 0;
+    }
+    // abort
+    TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
+    if (HTM_IS_CONFLICT(ret))
+        TM_STATS_ADD(my_tm_stats.conflicts, 1);
+    else if (HTM_IS_OVERFLOW(ret))
+        TM_STATS_ADD(my_tm_stats.overflows, 1);
+    else // self aborts
+        ;
+    spec_entry = 0;
+    return 1;
+}
+
+// tm parameters
+extern uint32_t TK_MIN_DISTANCE;
+extern uint32_t TK_MAX_DISTANCE;
+extern uint32_t TK_NUM_TRIES;
+extern bool TM_COND_VARS;
+extern bool USE_PTHREAD_COND_VARS;
 
 #endif

@@ -26,10 +26,7 @@ static const char* LIBPTHREAD_PATH = "libpthread.so.0"; // without specifying th
 #endif
 static void *libpthread_handle = 0;
 
-// ticket_tm parameters
-static uint32_t TK_MIN_DISTANCE = 0;
-static uint32_t TK_MAX_DISTANCE = 2;
-static uint32_t TK_NUM_TRIES    = 2;
+
 
 // Function pointers used to dispatch lock methods
 typedef int (*txlock_func_t)(txlock_t *);
@@ -55,8 +52,6 @@ static txlock_func_t libpthread_mutex_unlock = 0;
 static void (*libpthread_exit)(void *) = 0;
 static int (*libpthread_create)(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg) = 0;
 
-// whether to use pthread cond var implementation or our own
-static bool USE_PTHREAD_COND_VARS = true;
 
 
 // test-and-set lock =========================
@@ -111,24 +106,8 @@ static int tas_lock_tm(tas_lock_t *l) {
     TM_STATS_ADD(my_tm_stats.locks, 1);
     while (tatas(&l->val, 1)) {
       // if lock is held, start speculating
-      spec_entry = l;
-      TM_STATS_ADD(my_tm_stats.tries, 1);
-      TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
-      int ret;
-      if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
-        return 0;
-      }
-      // abort
-      TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
-      if (HTM_IS_CONFLICT(ret))
-          TM_STATS_ADD(my_tm_stats.conflicts, 1);
-      else if (HTM_IS_OVERFLOW(ret))
-          TM_STATS_ADD(my_tm_stats.overflows, 1);
-      else // self aborts
-          ;
-
-      spec_entry = 0;
-      tries++;
+      if(enter_htm==0){return 0;}
+      else{tries++;}
       // fall to the lock if out of tries
       if(tries>=TK_NUM_TRIES){
         int s = spin_begin();
@@ -216,26 +195,12 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
         if (dist <= TK_MAX_DISTANCE && dist >= TK_MIN_DISTANCE && tries < TK_NUM_TRIES) {
-            TM_STATS_ADD(my_tm_stats.tries, 1);
-            TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
-            spec_entry = l;
-            int ret;
-            if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
-                // TODO: we should self abort if it's my turn
-                // but where to check l->now in the txn?
-                return 0;
+            // if lock is held, start speculating
+            if(enter_htm==0){return 0;}
+            else{
+                spin_wait(8);
+                tries++;
             }
-            // abort
-            TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
-            if (HTM_IS_CONFLICT(ret))
-                TM_STATS_ADD(my_tm_stats.conflicts, 1);
-            else if (HTM_IS_OVERFLOW(ret))
-                TM_STATS_ADD(my_tm_stats.overflows, 1);
-            else // self aborts
-                ;
-            spec_entry = 0;
-            spin_wait(8);
-            tries++;
         } else {
             spin_wait(16*dist);
         }
@@ -299,23 +264,8 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
   TM_STATS_ADD(my_tm_stats.locks, 1);
   int tries = 0;
   while (libpthread_mutex_trylock((void*)l) != 0) {
-    spec_entry = l;
-    TM_STATS_ADD(my_tm_stats.tries, 1);
-    TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
-    int ret;
-    if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
-      return 0;
-    }
-    // abort
-    TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
-    if (HTM_IS_CONFLICT(ret))
-        TM_STATS_ADD(my_tm_stats.conflicts, 1);
-    else if (HTM_IS_OVERFLOW(ret))
-        TM_STATS_ADD(my_tm_stats.overflows, 1);
-    else // self aborts
-        ;
-    spec_entry = 0;
-    tries++;
+    if(enter_htm==0){return 0;}
+    else{tries++;}
 
     if(tries>=TK_NUM_TRIES){
         libpthread_mutex_lock((void*)l);
