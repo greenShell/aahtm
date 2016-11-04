@@ -712,7 +712,7 @@ __pthread_cond_wait (cond, mutex)
 
       // speculate if futex is held
       if(TM_COND_VARS && (tries < TK_NUM_TRIES) && (cond->__data.__futex == futex_val)){
-          if(enter_htm==0){return 0;}
+          if(enter_htm(cond)==0){return 0;}
           else{
             tries++;
           }
