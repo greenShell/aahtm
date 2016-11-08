@@ -106,7 +106,7 @@ static int tas_lock_tm(tas_lock_t *l) {
     TM_STATS_ADD(my_tm_stats.locks, 1);
     while (tatas(&l->val, 1)) {
       // if lock is held, start speculating
-      if(enter_htm==0){return 0;}
+      if(enter_htm(l)==0){return 0;}
       else{tries++;}
       // fall to the lock if out of tries
       if(tries>=TK_NUM_TRIES){
@@ -196,7 +196,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
         uint32_t dist = my_ticket - l->now;
         if (dist <= TK_MAX_DISTANCE && dist >= TK_MIN_DISTANCE && tries < TK_NUM_TRIES) {
             // if lock is held, start speculating
-            if(enter_htm==0){return 0;}
+            if(enter_htm(l)==0){return 0;}
             else{
                 spin_wait(8);
                 tries++;
@@ -264,7 +264,7 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
   TM_STATS_ADD(my_tm_stats.locks, 1);
   int tries = 0;
   while (libpthread_mutex_trylock((void*)l) != 0) {
-    if(enter_htm==0){return 0;}
+    if(enter_htm(l)==0){return 0;}
     else{tries++;}
 
     if(tries>=TK_NUM_TRIES){
