@@ -870,6 +870,8 @@ __pthread_cond_broadcast (cond)
       if (cond->__data.__mutex == (void *) ~0l)
 	goto wake_all;
 
+    goto wake_all; // JI- skip all the optimizations below because I'm pretty sure they're buggy
+
       /* Wake everybody.  */
       pthread_mutex_t *mut = (pthread_mutex_t *) cond->__data.__mutex;
 

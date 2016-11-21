@@ -10,7 +10,7 @@ libtxlock.so: txlock.s.o txcond.s.o txutil.s.o pthread_cond.s.o
 	gcc -shared $^ -ldl -o $@
 
 libtxlock.a: txlock.o txcond.o txutil.o pthread_cond.o
-	ar rcs $@ $^
+	gcc-ar rcs $@ $^
 
 tl-pthread.so: tl-pthread.s.o txlock.s.o txcond.s.o txutil.s.o pthread_cond.s.o
 	gcc -flto -shared $^ -ldl -o $@

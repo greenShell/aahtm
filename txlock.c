@@ -57,8 +57,15 @@ static int (*libpthread_create)(pthread_t *thread, const pthread_attr_t *attr, v
 // test-and-set lock =========================
 //
 struct _tas_lock_t {
-    volatile int32_t val;
-    volatile int32_t cnt;
+    union{
+        struct{
+            volatile int32_t val;
+            volatile int16_t ready;
+            volatile int16_t cnt;
+        };
+        volatile int64_t all;
+    };
+    
 } __attribute__((__packed__));
 
 typedef struct _tas_lock_t tas_lock_t;
@@ -133,6 +140,61 @@ static int tas_trylock_tm(tas_lock_t *l) {
 }
 
 static int tas_unlock_tm(tas_lock_t *l) {
+  if (spec_entry) { // in htm
+    } else { // not in HTM
+        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        __sync_lock_release(&l->val);
+  }
+  return 0;
+}
+
+// tas priority lock =========================
+//
+
+static int tas_priority_lock_tm(tas_lock_t *lk) {
+  int tries = 0;
+  if (spec_entry == 0) { // not in HTM
+    TM_STATS_ADD(my_tm_stats.locks, 1);
+    tas_lock_t copy;
+    int s = spin_begin();
+    while(true){
+        copy.all = lk->all;
+        if(copy.ready==0){
+            if (!tatas(&lk->val, 1)) {
+                break;
+            }
+        }
+        if(copy.cnt < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
+            __sync_fetch_and_add(&lk->cnt,1);
+            if(enter_htm==0){return 0;}
+            __sync_fetch_and_add(&lk->cnt,-1);
+            __sync_fetch_and_add(&lk->ready,1);
+            while (tatas(&lk->val, 1)){}
+            __sync_fetch_and_add(&lk->ready,-1);
+            break;
+        }
+        s = spin_wait(s);
+    }
+  }
+  TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+  return 0;
+}
+
+static int tas_priority_trylock_tm(tas_lock_t *lk) {
+  if (spec_entry == 0) { // not in HTM
+    tas_lock_t copy;
+    copy.all = lk->all;
+    if(copy.ready==0 && (tatas(&lk->val, 1)==0)){
+      TM_STATS_ADD(my_tm_stats.locks, 1);
+      TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+      return 0;
+    }
+    else{return 1;}
+  }
+  return 0;
+}
+
+static int tas_priority_unlock_tm(tas_lock_t *l) {
   if (spec_entry) { // in htm
     } else { // not in HTM
         TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
@@ -545,6 +607,7 @@ static lock_type_t lock_types[] = {
     {"pthread_tm",  sizeof(pthread_mutex_t), (txlock_func_t)pthread_lock_tm, (txlock_func_t)pthread_trylock_tm, (txlock_func_t)pthread_unlock_tm},
     {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock},
     {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm},
+    {"tas_priority_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_priority_lock_tm, (txlock_func_t)tas_priority_trylock_tm, (txlock_func_t)tas_priority_unlock_tm},
 //    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle},
     {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock},
     {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm},
