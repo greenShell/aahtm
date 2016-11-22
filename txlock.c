@@ -166,7 +166,7 @@ static int tas_priority_lock_tm(tas_lock_t *lk) {
         }
         if(copy.cnt < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
             __sync_fetch_and_add(&lk->cnt,1);
-            if(enter_htm==0){return 0;}
+            if(enter_htm(lk)==0){return 0;}
             __sync_fetch_and_add(&lk->cnt,-1);
             __sync_fetch_and_add(&lk->ready,1);
             while (tatas(&lk->val, 1)){}
