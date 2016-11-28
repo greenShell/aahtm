@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <assert.h>
+#include <signal.h>
 
 #include "txlock.h"
 #include "txutil.h"
@@ -75,21 +76,21 @@ inline int tatas(volatile int32_t* val, int32_t v) {
 }
 
 static int tas_lock(tas_lock_t *l) {
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     if (tatas(&l->val, 1)) {
         int s = spin_begin();
         do {
             s = spin_wait(s);
         } while (tatas(&l->val, 1));
     }
-    TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
     return 0;
 }
 
 static int tas_trylock(tas_lock_t *l) {
     if(tatas(&l->val, 1) == 0){
-        TM_STATS_ADD(my_tm_stats.locks, 1);
-        TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->locks, 1);
+        TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
         return 0;
     }
     return 1;
@@ -97,7 +98,7 @@ static int tas_trylock(tas_lock_t *l) {
 
 static int tas_unlock(tas_lock_t *l) {
     __sync_lock_release(&l->val);
-    TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
     return 0;
 }
 
@@ -110,7 +111,7 @@ static int tas_unlock(tas_lock_t *l) {
 static int tas_lock_tm(tas_lock_t *l) {
   int tries = 0;
   if (spec_entry == 0) { // not in HTM
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     while (tatas(&l->val, 1)) {
       // if lock is held, start speculating
       if(enter_htm(l)==0){return 0;}
@@ -123,15 +124,15 @@ static int tas_lock_tm(tas_lock_t *l) {
       }
     }
   }
-  TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
   return 0;
 }
 
 static int tas_trylock_tm(tas_lock_t *l) {
   if (spec_entry == 0) { // not in HTM
     if(tatas(&l->val, 1)==0){
-      TM_STATS_ADD(my_tm_stats.locks, 1);
-      TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+      TM_STATS_ADD(my_tm_stats->locks, 1);
+      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
       return 0;
     }
     else{return 1;}
@@ -142,7 +143,7 @@ static int tas_trylock_tm(tas_lock_t *l) {
 static int tas_unlock_tm(tas_lock_t *l) {
   if (spec_entry) { // in htm
     } else { // not in HTM
-        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
         __sync_lock_release(&l->val);
   }
   return 0;
@@ -154,7 +155,7 @@ static int tas_unlock_tm(tas_lock_t *l) {
 static int tas_priority_lock_tm(tas_lock_t *lk) {
   int tries = 0;
   if (spec_entry == 0) { // not in HTM
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     tas_lock_t copy;
     int s = spin_begin();
     while(true){
@@ -176,7 +177,7 @@ static int tas_priority_lock_tm(tas_lock_t *lk) {
         s = spin_wait(s);
     }
   }
-  TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
   return 0;
 }
 
@@ -185,8 +186,8 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
     tas_lock_t copy;
     copy.all = lk->all;
     if(copy.ready==0 && (tatas(&lk->val, 1)==0)){
-      TM_STATS_ADD(my_tm_stats.locks, 1);
-      TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+      TM_STATS_ADD(my_tm_stats->locks, 1);
+      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
       return 0;
     }
     else{return 1;}
@@ -197,7 +198,7 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
 static int tas_priority_unlock_tm(tas_lock_t *l) {
   if (spec_entry) { // in htm
     } else { // not in HTM
-        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
         __sync_lock_release(&l->val);
   }
   return 0;
@@ -214,13 +215,13 @@ struct _ticket_lock_t {
 typedef struct _ticket_lock_t ticket_lock_t;
 
 static int ticket_lock(ticket_lock_t *l) {
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
         uint32_t dist = my_ticket - l->now;
         spin_wait(16*dist);
     }
-    TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
     return 0;
 }
 
@@ -231,8 +232,8 @@ static int ticket_trylock(ticket_lock_t *l) {
     n.next = t.next+1;
 
     if((!(__sync_bool_compare_and_swap((int64_t*)l, *(int64_t*)&t, *(int64_t*)&n))) == 0){
-      TM_STATS_ADD(my_tm_stats.locks, 1);
-      TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+      TM_STATS_ADD(my_tm_stats->locks, 1);
+      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
       return 0;
     }
     else{return 1;}
@@ -240,7 +241,7 @@ static int ticket_trylock(ticket_lock_t *l) {
 
 static int ticket_unlock(ticket_lock_t *l) {
     l->now++;
-    TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
     return 0;
 }
 
@@ -251,7 +252,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
     if (spec_entry)
         return 0;
 
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     uint32_t tries = 0;
     uint32_t my_ticket = __sync_fetch_and_add(&l->next, 1);
     while (my_ticket != l->now) {
@@ -267,7 +268,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
             spin_wait(16*dist);
         }
     }
-    TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
     return 0;
 }
 
@@ -287,7 +288,7 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
        //}
     } else { // not in HTM
         l->now++;
-        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
     }
     return 0;
 }
@@ -297,22 +298,22 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
 //
 
 static int pthread_lock(void *lk){
-    TM_STATS_ADD(my_tm_stats.locks, 1);
+    TM_STATS_ADD(my_tm_stats->locks, 1);
     int retval = libpthread_mutex_lock(lk);
-    TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
     return retval;
 }
 static int pthread_trylock(void *lk){
     int retval = libpthread_mutex_trylock(lk);
     if(retval==0){
-        TM_STATS_ADD(my_tm_stats.locks, 1);
-        TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->locks, 1);
+        TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
     }
     return retval;
 }
 static int pthread_unlock(void *lk){
     int retval = libpthread_mutex_unlock(lk);
-    TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
     return retval;
 }
 
@@ -323,7 +324,7 @@ static int pthread_unlock(void *lk){
 static int pthread_lock_tm(pthread_mutex_t *l) {
   if (spec_entry){return 0;}
 
-  TM_STATS_ADD(my_tm_stats.locks, 1);
+  TM_STATS_ADD(my_tm_stats->locks, 1);
   int tries = 0;
   while (libpthread_mutex_trylock((void*)l) != 0) {
     if(enter_htm(l)==0){return 0;}
@@ -334,7 +335,7 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
         break;
     }
   }
-  TM_STATS_SUB(my_tm_stats.cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
   return 0;
 }
 
@@ -345,8 +346,8 @@ static int pthread_trylock_tm(pthread_mutex_t *l) {
     } else { // not in HTM
         int retval = libpthread_mutex_trylock((void*)l);
         if(retval==0){
-            TM_STATS_ADD(my_tm_stats.locks, 1);
-            TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+            TM_STATS_ADD(my_tm_stats->locks, 1);
+            TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
         }
         return retval;
     }
@@ -359,7 +360,7 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
        //}
     } else { // not in HTM
         libpthread_mutex_unlock((void*)l);
-        TM_STATS_ADD(my_tm_stats.cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
     }
     return 0;
 }
@@ -650,6 +651,22 @@ static void setup_pthread_funcs() {
     }
 }
 
+
+static void (*old_int_handler)(int signum)=SIG_IGN;
+
+static void sig_int_handler(const int sig) {
+    if (old_int_handler != SIG_IGN && old_int_handler != SIG_DFL)
+        (*old_int_handler)(sig);
+    exit(-1);
+}
+
+static void (*old_term_handler)(int signum)=SIG_IGN;
+static void sig_term_handler(const int sig) {
+    if (old_int_handler != SIG_IGN && old_int_handler != SIG_DFL)
+        (*old_int_handler)(sig);
+    exit(-1);
+}
+
 __attribute__((constructor(201)))  // after tl-pthread.so
 static void init_lib_txlock() {
     setup_pthread_funcs();
@@ -682,61 +699,52 @@ static void init_lib_txlock() {
       // notify user of arguments
     fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
     fflush(stderr);
+    
+    // register signal handlers just in case the default ones are active:
+    old_int_handler = signal(SIGINT, sig_int_handler);
+    old_term_handler =  signal(SIGTERM, sig_term_handler);
 }
+
 
 typedef struct {
     void *(*routine) (void *);
     void* args;
 } spawn_struct;
 
-void* __tl_dummy_thread_main(void *spec){
+static void* _tl_dummy_thread_main(void *spec){
     
     // unwrap arguments
     spawn_struct* orig = (spawn_struct*)spec;
     void *(*start_routine) (void *); 
     void * args;
+    void* ret;
+       
+    // push my stats onto the stack
+    my_tm_stats = calloc(1,sizeof(tm_stats_t));   
+    do{ 
+        my_tm_stats->next = master_tm_stats.next;
+    }while(!__sync_bool_compare_and_swap(&(master_tm_stats.next),my_tm_stats->next,my_tm_stats));
     
     // call the actual desired function
-    void* ret = orig->routine(orig->args);
+    ret = orig->routine(orig->args);
    
     // clean up spawn structure
     free(orig);
-    
-    // sync local stats to the global stats
-    __sync_fetch_and_add(&tm_stats.cycles, my_tm_stats.cycles);
-    __sync_fetch_and_add(&tm_stats.tm_cycles, my_tm_stats.tm_cycles);
-    __sync_fetch_and_add(&tm_stats.locks, my_tm_stats.locks);
-    __sync_fetch_and_add(&tm_stats.tries, my_tm_stats.tries);
-    __sync_fetch_and_add(&tm_stats.stops, my_tm_stats.stops);
-    __sync_fetch_and_add(&tm_stats.overflows, my_tm_stats.overflows);
-    __sync_fetch_and_add(&tm_stats.conflicts, my_tm_stats.conflicts);
-    __sync_fetch_and_add(&tm_stats.threads, 1);
-
+       
     return ret;
 }
 
-int __tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *args){
+int _tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *args){
     // wrap arguments
     spawn_struct* orig = malloc(sizeof(spawn_struct)); // destroyed by spawned thread
     orig->routine = start_routine;
     orig->args = args;
-    return libpthread_create(thread,attr,&__tl_dummy_thread_main,orig);
+    return libpthread_create(thread,attr,&_tl_dummy_thread_main,orig);
 }
 
 
-void __tl_pthread_exit(void *retval)
+void _tl_pthread_exit(void *retval)
 {
-    // sync local stats to the global stats
-    __sync_fetch_and_add(&tm_stats.cycles, my_tm_stats.cycles);
-    __sync_fetch_and_add(&tm_stats.tm_cycles, my_tm_stats.tm_cycles);
-    __sync_fetch_and_add(&tm_stats.locks, my_tm_stats.locks);
-    __sync_fetch_and_add(&tm_stats.tries, my_tm_stats.tries);
-    __sync_fetch_and_add(&tm_stats.stops, my_tm_stats.stops);
-    __sync_fetch_and_add(&tm_stats.overflows, my_tm_stats.overflows);
-    __sync_fetch_and_add(&tm_stats.conflicts, my_tm_stats.conflicts);
-    __sync_fetch_and_add(&tm_stats.threads, 1);
-
-    // call real pthread function
     libpthread_exit(retval);
 }
 
@@ -744,6 +752,20 @@ void __tl_pthread_exit(void *retval)
 __attribute__((destructor))
 static void uninit_lib_txlock()
 {
+    struct _tm_stats_t* volatile curr = &master_tm_stats;
+    do{
+        tm_stats.cycles += curr->cycles;
+        tm_stats.tm_cycles += curr->tm_cycles;
+        tm_stats.locks += curr->locks;
+        tm_stats.tries += curr->tries;
+        tm_stats.stops += curr->stops;
+        tm_stats.overflows += curr->overflows;
+        tm_stats.conflicts += curr->conflicts;
+        tm_stats.threads += 1;
+        curr = curr->next;
+    }while(curr!=NULL);
+    
+    
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
     if (tm_stats.threads==0) {
         fprintf(stderr,"\nWARNING: No threads exited properly! Unable to gather profiling information.  \

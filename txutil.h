@@ -44,6 +44,7 @@
 
 
 typedef struct _tm_stats_t {
+    struct _tm_stats_t* volatile next;
     int64_t cycles;        // total cycles in lock mode
     int64_t tm_cycles;     // total cycles in TM mode
     uint32_t locks;         // # of lock acqs
@@ -52,11 +53,13 @@ typedef struct _tm_stats_t {
     uint32_t overflows;     // overflow aborts
     uint32_t conflicts;     // conflict aborts
     uint32_t threads;     // number of threads
-} __attribute__ ((aligned(64))) tm_stats_t;
+} __attribute__ ((aligned(128))) tm_stats_t;
 
 // initialized in txutil.c
-extern __thread tm_stats_t my_tm_stats; // thread-local stats
+extern tm_stats_t master_tm_stats;      // master thread's local state
+extern __thread tm_stats_t* my_tm_stats; // thread-local stats
 extern tm_stats_t tm_stats;             // global stats, updated only when a thread exits
+
 
 #ifdef TM_NO_PROFILING
 #define TM_STATS_ADD(stat, value)
@@ -119,17 +122,17 @@ extern __thread void * volatile spec_entry;
 int inline enter_htm(void* primitive){
     spec_entry = primitive;
     int ret;
-    TM_STATS_ADD(my_tm_stats.tries, 1);
-    TM_STATS_SUB(my_tm_stats.tm_cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->tries, 1);
+    TM_STATS_SUB(my_tm_stats->tm_cycles, rdtsc());
     if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
         return 0;
     }
     // abort
-    TM_STATS_ADD(my_tm_stats.tm_cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->tm_cycles, rdtsc());
     if (HTM_IS_CONFLICT(ret))
-        TM_STATS_ADD(my_tm_stats.conflicts, 1);
+        TM_STATS_ADD(my_tm_stats->conflicts, 1);
     else if (HTM_IS_OVERFLOW(ret))
-        TM_STATS_ADD(my_tm_stats.overflows, 1);
+        TM_STATS_ADD(my_tm_stats->overflows, 1);
     else // self aborts
         ;
     spec_entry = 0;
