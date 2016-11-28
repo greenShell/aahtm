@@ -1,4 +1,5 @@
 #include "txlock.h"
+#include <stdio.h>
 
 // internal handlers, shoud never be called inside a user app
 int _tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *arg);
