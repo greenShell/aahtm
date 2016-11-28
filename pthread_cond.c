@@ -1115,3 +1115,5 @@ __pthread_cond_timedwait (cond, mutex, abstime)
   return err ?: result;
 }
 
+int pthread_cond_destroy(pthread_cond_t *cond){return 0;}
+
