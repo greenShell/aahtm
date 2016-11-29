@@ -196,8 +196,7 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
 }
 
 static int tas_priority_unlock_tm(tas_lock_t *l) {
-  if (spec_entry) { // in htm
-    } else { // not in HTM
+  if (spec_entry == 0) { // not in HTM
         TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
         __sync_lock_release(&l->val);
   }
