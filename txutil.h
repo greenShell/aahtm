@@ -22,6 +22,7 @@
     #define HTM_SUCCESSFUL      _XBEGIN_STARTED
     #define HTM_IS_CONFLICT(c)  ((c) & _XABORT_CONFLICT)
     #define HTM_IS_OVERFLOW(c)  ((c) & _XABORT_CAPACITY)
+    #define HTM_IS_ACTIVE()     _xtest()
 
     inline uint64_t rdtsc() { return __rdtsc(); }
 
@@ -50,6 +51,7 @@ typedef struct _tm_stats_t {
     uint32_t locks;         // # of lock acqs
     uint32_t tries;         // # of tm_begins
     uint32_t stops;         // # of self-stop
+    uint32_t commits;       // # of tm_ends
     uint32_t overflows;     // overflow aborts
     uint32_t conflicts;     // conflict aborts
     uint32_t threads;     // number of threads
@@ -65,6 +67,11 @@ extern tm_stats_t tm_stats;             // global stats, updated only when a thr
 #define TM_STATS_ADD(stat, value)
 #define TM_STATS_SUB(stat, value)
 #else
+    #ifdef TM_PROFILE_RDTSC
+        #define RDTSC() rdtsc()
+    #else
+        #define RDTSC() (0)
+    #endif
 #define TM_STATS_ADD(stat, value) ((stat)+=(value))
 #define TM_STATS_SUB(stat, value) ((stat)-=(value))
 #endif
@@ -123,12 +130,12 @@ int inline enter_htm(void* primitive){
     spec_entry = primitive;
     int ret;
     TM_STATS_ADD(my_tm_stats->tries, 1);
-    TM_STATS_SUB(my_tm_stats->tm_cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->tm_cycles, RDTSC());
     if ((ret = HTM_SIMPLE_BEGIN()) == HTM_SUCCESSFUL) {
         return 0;
     }
     // abort
-    TM_STATS_ADD(my_tm_stats->tm_cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->tm_cycles, RDTSC());
     if (HTM_IS_CONFLICT(ret))
         TM_STATS_ADD(my_tm_stats->conflicts, 1);
     else if (HTM_IS_OVERFLOW(ret))

@@ -83,14 +83,14 @@ static int tas_lock(tas_lock_t *l) {
             s = spin_wait(s);
         } while (tatas(&l->val, 1));
     }
-    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
     return 0;
 }
 
 static int tas_trylock(tas_lock_t *l) {
     if(tatas(&l->val, 1) == 0){
         TM_STATS_ADD(my_tm_stats->locks, 1);
-        TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+        TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
         return 0;
     }
     return 1;
@@ -98,11 +98,54 @@ static int tas_trylock(tas_lock_t *l) {
 
 static int tas_unlock(tas_lock_t *l) {
     __sync_lock_release(&l->val);
-    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
     return 0;
 }
 
 
+// test-and-set TM lock =========================
+//
+
+static int tas_lock_hle(tas_lock_t *l) {
+  int tries = 0;
+  int s = spin_begin();
+
+  while (enter_htm(l)) {
+    tries++;
+
+    if(tries>=TK_NUM_TRIES){
+      TM_STATS_ADD(my_tm_stats->locks, 1);
+      while (tatas(&l->val, 1)){s = spin_wait(s);}
+      break;
+    } else {
+      s = spin_wait(s);
+    }
+  }
+
+  // locked by other thread, waiting for abort
+  if (HTM_IS_ACTIVE() && l->val) {
+    while (1)
+     spin_wait(spin_begin());
+  }
+
+  return 0;
+}
+
+static int tas_trylock_hle(tas_lock_t *l) {
+  // TODO: 
+  assert(0);
+}
+
+static int tas_unlock_hle(tas_lock_t *l) {
+  if (HTM_IS_ACTIVE()) { // in htm
+    HTM_END();
+    TM_STATS_ADD(my_tm_stats->commits, 1);
+  } else { // not in HTM
+    __sync_lock_release(&l->val);
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
+  }
+  return 0;
+}
 
 
 // test-and-set TM lock =========================
@@ -124,7 +167,7 @@ static int tas_lock_tm(tas_lock_t *l) {
       }
     }
   }
-  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
   return 0;
 }
 
@@ -132,7 +175,7 @@ static int tas_trylock_tm(tas_lock_t *l) {
   if (spec_entry == 0) { // not in HTM
     if(tatas(&l->val, 1)==0){
       TM_STATS_ADD(my_tm_stats->locks, 1);
-      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+      TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
       return 0;
     }
     else{return 1;}
@@ -143,7 +186,7 @@ static int tas_trylock_tm(tas_lock_t *l) {
 static int tas_unlock_tm(tas_lock_t *l) {
   if (spec_entry) { // in htm
     } else { // not in HTM
-        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
         __sync_lock_release(&l->val);
   }
   return 0;
@@ -177,7 +220,7 @@ static int tas_priority_lock_tm(tas_lock_t *lk) {
         s = spin_wait(s);
     }
   }
-  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
   return 0;
 }
 
@@ -187,7 +230,7 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
     copy.all = lk->all;
     if(copy.ready==0 && (tatas(&lk->val, 1)==0)){
       TM_STATS_ADD(my_tm_stats->locks, 1);
-      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+      TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
       return 0;
     }
     else{return 1;}
@@ -197,7 +240,7 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
 
 static int tas_priority_unlock_tm(tas_lock_t *l) {
   if (spec_entry == 0) { // not in HTM
-        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
         __sync_lock_release(&l->val);
   }
   return 0;
@@ -220,7 +263,7 @@ static int ticket_lock(ticket_lock_t *l) {
         uint32_t dist = my_ticket - l->now;
         spin_wait(16*dist);
     }
-    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
     return 0;
 }
 
@@ -232,7 +275,7 @@ static int ticket_trylock(ticket_lock_t *l) {
 
     if((!(__sync_bool_compare_and_swap((int64_t*)l, *(int64_t*)&t, *(int64_t*)&n))) == 0){
       TM_STATS_ADD(my_tm_stats->locks, 1);
-      TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+      TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
       return 0;
     }
     else{return 1;}
@@ -240,7 +283,7 @@ static int ticket_trylock(ticket_lock_t *l) {
 
 static int ticket_unlock(ticket_lock_t *l) {
     l->now++;
-    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
     return 0;
 }
 
@@ -267,7 +310,7 @@ static int ticket_lock_tm(ticket_lock_t *l) {
             spin_wait(16*dist);
         }
     }
-    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
     return 0;
 }
 
@@ -287,7 +330,7 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
        //}
     } else { // not in HTM
         l->now++;
-        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
     }
     return 0;
 }
@@ -299,20 +342,20 @@ static int ticket_unlock_tm(ticket_lock_t *l) {
 static int pthread_lock(void *lk){
     TM_STATS_ADD(my_tm_stats->locks, 1);
     int retval = libpthread_mutex_lock(lk);
-    TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+    TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
     return retval;
 }
 static int pthread_trylock(void *lk){
     int retval = libpthread_mutex_trylock(lk);
     if(retval==0){
         TM_STATS_ADD(my_tm_stats->locks, 1);
-        TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+        TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
     }
     return retval;
 }
 static int pthread_unlock(void *lk){
     int retval = libpthread_mutex_unlock(lk);
-    TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
     return retval;
 }
 
@@ -334,7 +377,7 @@ static int pthread_lock_tm(pthread_mutex_t *l) {
         break;
     }
   }
-  TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
+  TM_STATS_SUB(my_tm_stats->cycles, RDTSC());
   return 0;
 }
 
@@ -346,7 +389,7 @@ static int pthread_trylock_tm(pthread_mutex_t *l) {
         int retval = libpthread_mutex_trylock((void*)l);
         if(retval==0){
             TM_STATS_ADD(my_tm_stats->locks, 1);
-            TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+            TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
         }
         return retval;
     }
@@ -359,7 +402,7 @@ static int pthread_unlock_tm(pthread_mutex_t *l) {
        //}
     } else { // not in HTM
         libpthread_mutex_unlock((void*)l);
-        TM_STATS_ADD(my_tm_stats->cycles, rdtsc());
+        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
     }
     return 0;
 }
@@ -608,7 +651,7 @@ static lock_type_t lock_types[] = {
     {"tas",         sizeof(tas_lock_t), (txlock_func_t)tas_lock, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock},
     {"tas_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_lock_tm, (txlock_func_t)tas_trylock_tm, (txlock_func_t)tas_unlock_tm},
     {"tas_priority_tm",      sizeof(tas_lock_t), (txlock_func_t)tas_priority_lock_tm, (txlock_func_t)tas_priority_trylock_tm, (txlock_func_t)tas_priority_unlock_tm},
-//    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock, (txlock_func_t)tas_unlock_hle},
+    {"tas_hle",     sizeof(tas_lock_t), (txlock_func_t)tas_lock_hle, (txlock_func_t)tas_trylock_hle, (txlock_func_t)tas_unlock_hle},
     {"ticket",      sizeof(ticket_lock_t), (txlock_func_t)ticket_lock, (txlock_func_t)ticket_trylock, (txlock_func_t)ticket_unlock},
     {"ticket_tm",   sizeof(ticket_lock_t), (txlock_func_t)ticket_lock_tm, (txlock_func_t)ticket_trylock_tm, (txlock_func_t)ticket_unlock_tm},
     {"mcs",   sizeof(mcs_lock_t), (txlock_func_t)mcs_lock, (txlock_func_t)mcs_trylock, (txlock_func_t)mcs_unlock},
@@ -687,13 +730,13 @@ static void init_lib_txlock() {
     func_tl_unlock = using_lock_type->unlock_fun;
 
     // read auxiliary arguments
-    char* env;
-    env = getenv("LIBTXLOCK_MAX_DISTANCE");
-    env?TK_MAX_DISTANCE=atoi(env):2;
-    env = getenv("LIBTXLOCK_MIN_DISTANCE");
-    env?TK_MIN_DISTANCE=atoi(env):0;
-    env = getenv("LIBTXLOCK_NUM_TRIES");
-    env?TK_NUM_TRIES=atoi(env):4;
+    const char* env;
+    if ((env = getenv("LIBTXLOCK_MAX_DISTANCE")) != NULL)
+        TK_MAX_DISTANCE=atoi(env);
+    if ((env = getenv("LIBTXLOCK_MIN_DISTANCE")) != NULL)
+        TK_MIN_DISTANCE=atoi(env);
+    if ((env = getenv("LIBTXLOCK_NUM_TRIES")) != NULL)
+        TK_NUM_TRIES=atoi(env);
 
       // notify user of arguments
     fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
@@ -758,6 +801,7 @@ static void uninit_lib_txlock()
         tm_stats.locks += curr->locks;
         tm_stats.tries += curr->tries;
         tm_stats.stops += curr->stops;
+        tm_stats.commits += curr->commits;
         tm_stats.overflows += curr->overflows;
         tm_stats.conflicts += curr->conflicts;
         tm_stats.threads += 1;
@@ -766,12 +810,13 @@ static void uninit_lib_txlock()
 
 
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
+    fprintf(stderr, ", LIBTXLOCK_NUM_TRIES: %d, LIBTXLOCK_MIN_DISTANCE: %d, LIBTXLOCK_MAX_DISTANCE: %d", TK_NUM_TRIES, TK_MIN_DISTANCE, TK_MAX_DISTANCE);
     if (tm_stats.threads==0) {
         fprintf(stderr,"\nWARNING: No threads exited properly! Unable to gather profiling information.  \
 Ensure all threads properly terminate using pthread_exit()");
     }
     else{
-        fprintf(stderr, ", threads %d",
+        fprintf(stderr, "\nLIBTXLOCK stats, threads %d",
             tm_stats.threads);
     }
     if (tm_stats.locks!=0) {
@@ -779,9 +824,9 @@ Ensure all threads properly terminate using pthread_exit()");
                         (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks);
     }
     if (tm_stats.tries!=0) {
-        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d",
+        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d, commits: %d",
                         (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries,
-                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
+                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops, tm_stats.commits);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
