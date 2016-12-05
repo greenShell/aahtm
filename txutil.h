@@ -58,7 +58,7 @@ typedef struct _tm_stats_t {
 } __attribute__ ((aligned(128))) tm_stats_t;
 
 // initialized in txutil.c
-extern tm_stats_t*tm_stats_head;      // master thread's local state
+extern tm_stats_t* tm_stats_head;      // master thread's local state
 extern __thread tm_stats_t* my_tm_stats; // thread-local stats
 extern tm_stats_t tm_stats;             // global stats, updated only when a thread exits
 
