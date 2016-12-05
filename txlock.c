@@ -66,7 +66,7 @@ struct _tas_lock_t {
         };
         volatile int64_t all;
     };
-    
+
 } __attribute__((__packed__));
 
 typedef struct _tas_lock_t tas_lock_t;
@@ -464,20 +464,20 @@ static int inline mcs_lock_common(mcs_lock_t *lk, bool try_lock, bool tm) {
 
       // decide whether to speculate
       long now_serving_copy = lk->now_serving;
-      if(now_serving_copy<cnt-TK_MIN_DISTANCE && 
+      if(now_serving_copy<cnt-TK_MIN_DISTANCE &&
        now_serving_copy>cnt-TK_MAX_DISTANCE &&
        spec_entry==NULL){
         spec_entry = lk;
         if (HTM_SIMPLE_BEGIN() == HTM_SUCCESSFUL) {
           if(mine->speculate!=true || mine->wait!=true){
             HTM_ABORT(0);
-          }         
+          }
           else{return 0;}
         }
         spec_entry=NULL;
       }
       // finished speculating
-    
+
       // actually acquire the lock
       while (mine->wait) {}
       __sync_synchronize(); // is this barrier needed?
@@ -564,7 +564,7 @@ static inline int mcs_unlock_common(mcs_lock_t *lk, bool tm) {
 
   // if someone is waiting on me; set their flag to let them start
   mine->lock_next->wait = false;
-  
+
   dealloc_node(mine);
 
   return 0;
@@ -640,10 +640,10 @@ static void setup_pthread_funcs() {
 
     // handler for pthread_exit and create
     libpthread_exit = (void (*)(void *))dlsym(handle, "pthread_exit");
-    
-    libpthread_create = (int (*)(pthread_t *thread, const pthread_attr_t *attr, 
+
+    libpthread_create = (int (*)(pthread_t *thread, const pthread_attr_t *attr,
       void *(*start_routine) (void *), void *arg))dlsym(handle, "pthread_create");
-    
+
     if ((error = dlerror()) != NULL)  {
         fputs(error, stderr);
         exit(1);
@@ -698,7 +698,7 @@ static void init_lib_txlock() {
       // notify user of arguments
     fprintf(stderr, "LIBTXLOCK_LOCK: %s\n", using_lock_type->name);
     fflush(stderr);
-    
+
     // register signal handlers just in case the default ones are active:
     old_int_handler = signal(SIGINT, sig_int_handler);
     old_term_handler =  signal(SIGTERM, sig_term_handler);
@@ -711,25 +711,25 @@ typedef struct {
 } spawn_struct;
 
 static void* _tl_dummy_thread_main(void *spec){
-    
+
     // unwrap arguments
     spawn_struct* orig = (spawn_struct*)spec;
-    void *(*start_routine) (void *); 
+    void *(*start_routine) (void *);
     void * args;
     void* ret;
-       
+
     // push my stats onto the stack
-    my_tm_stats = calloc(1,sizeof(tm_stats_t));   
-    do{ 
+    my_tm_stats = calloc(1,sizeof(tm_stats_t));
+    do{
         my_tm_stats->next = master_tm_stats.next;
     }while(!__sync_bool_compare_and_swap(&(master_tm_stats.next),my_tm_stats->next,my_tm_stats));
-    
+
     // call the actual desired function
     ret = orig->routine(orig->args);
-   
+
     // clean up spawn structure
     free(orig);
-       
+
     return ret;
 }
 
@@ -763,8 +763,8 @@ static void uninit_lib_txlock()
         tm_stats.threads += 1;
         curr = curr->next;
     }while(curr!=NULL);
-    
-    
+
+
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
     if (tm_stats.threads==0) {
         fprintf(stderr,"\nWARNING: No threads exited properly! Unable to gather profiling information.  \
