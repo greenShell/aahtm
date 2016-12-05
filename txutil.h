@@ -45,20 +45,20 @@
 
 
 typedef struct _tm_stats_t {
-    int64_t cycles;        // total cycles in lock mode
-    int64_t tm_cycles;     // total cycles in TM mode
+    uint64_t cycles;        // total cycles in lock mode
+    uint64_t tm_cycles;     // total cycles in TM mode
     uint32_t locks;         // # of lock acqs
     uint32_t tries;         // # of tm_begins
     uint32_t stops;         // # of self-stop
     uint32_t commits;       // # of tm_ends
     uint32_t overflows;     // overflow aborts
     uint32_t conflicts;     // conflict aborts
-    uint32_t threads;     // number of threads
+    uint32_t threads;       // number of threads
     struct _tm_stats_t* volatile next;
 } __attribute__ ((aligned(128))) tm_stats_t;
 
 // initialized in txutil.c
-extern tm_stats_t master_tm_stats;      // master thread's local state
+extern tm_stats_t*tm_stats_head;      // master thread's local state
 extern __thread tm_stats_t* my_tm_stats; // thread-local stats
 extern tm_stats_t tm_stats;             // global stats, updated only when a thread exits
 
@@ -68,9 +68,9 @@ extern tm_stats_t tm_stats;             // global stats, updated only when a thr
 #define TM_STATS_SUB(stat, value)
 #else
     #ifdef TM_PROFILE_RDTSC
-        #define RDTSC() 0
-    #else
         #define RDTSC() rdtsc()
+    #else
+        #define RDTSC() 0
     #endif
 #define TM_STATS_ADD(stat, value) ((stat)+=(value))
 #define TM_STATS_SUB(stat, value) ((stat)-=(value))

@@ -759,8 +759,8 @@ void tl_thread_enter() {
         my_tm_stats = aligned_alloc(256, sizeof(tm_stats_t)); //calloc(1,sizeof(tm_stats_t));
         memset(my_tm_stats, 0, sizeof(tm_stats_t));
         do {
-            my_tm_stats->next = master_tm_stats.next;
-        } while(!__sync_bool_compare_and_swap(&(master_tm_stats.next),my_tm_stats->next,my_tm_stats));
+            my_tm_stats->next = tm_stats_head;
+        } while(!__sync_bool_compare_and_swap(&tm_stats_head, my_tm_stats->next, my_tm_stats));
     }
 }
 
@@ -801,7 +801,7 @@ void _tl_pthread_exit(void *retval)
 __attribute__((destructor))
 static void uninit_lib_txlock()
 {
-    struct _tm_stats_t* volatile curr = master_tm_stats.next;
+    struct _tm_stats_t* volatile curr = tm_stats_head;
     while (curr) {
         tm_stats.cycles += curr->cycles;
         tm_stats.tm_cycles += curr->tm_cycles;
