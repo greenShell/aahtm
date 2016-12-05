@@ -17,6 +17,8 @@ struct _txlock_t{
 };
 typedef struct _txlock_t txlock_t;
 
+void tl_thread_enter();
+
 int tl_lock(txlock_t *l);
 int tl_trylock(txlock_t *l);
 int tl_unlock(txlock_t *l);

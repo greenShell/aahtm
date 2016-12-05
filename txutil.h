@@ -45,7 +45,6 @@
 
 
 typedef struct _tm_stats_t {
-    struct _tm_stats_t* volatile next;
     int64_t cycles;        // total cycles in lock mode
     int64_t tm_cycles;     // total cycles in TM mode
     uint32_t locks;         // # of lock acqs
@@ -55,6 +54,7 @@ typedef struct _tm_stats_t {
     uint32_t overflows;     // overflow aborts
     uint32_t conflicts;     // conflict aborts
     uint32_t threads;     // number of threads
+    struct _tm_stats_t* volatile next;
 } __attribute__ ((aligned(128))) tm_stats_t;
 
 // initialized in txutil.c
@@ -68,9 +68,9 @@ extern tm_stats_t tm_stats;             // global stats, updated only when a thr
 #define TM_STATS_SUB(stat, value)
 #else
     #ifdef TM_PROFILE_RDTSC
-        #define RDTSC() rdtsc()
+        #define RDTSC() 0
     #else
-        #define RDTSC() (0)
+        #define RDTSC() rdtsc()
     #endif
 #define TM_STATS_ADD(stat, value) ((stat)+=(value))
 #define TM_STATS_SUB(stat, value) ((stat)-=(value))

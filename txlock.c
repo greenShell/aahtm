@@ -185,9 +185,9 @@ static int tas_trylock_tm(tas_lock_t *l) {
 
 static int tas_unlock_tm(tas_lock_t *l) {
   if (spec_entry) { // in htm
-    } else { // not in HTM
-        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
-        __sync_lock_release(&l->val);
+  } else { // not in HTM
+    __sync_lock_release(&l->val);
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
   }
   return 0;
 }
@@ -240,8 +240,8 @@ static int tas_priority_trylock_tm(tas_lock_t *lk) {
 
 static int tas_priority_unlock_tm(tas_lock_t *l) {
   if (spec_entry == 0) { // not in HTM
-        TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
-        __sync_lock_release(&l->val);
+    __sync_lock_release(&l->val);
+    TM_STATS_ADD(my_tm_stats->cycles, RDTSC());
   }
   return 0;
 }
@@ -753,6 +753,17 @@ typedef struct {
     void* args;
 } spawn_struct;
 
+void tl_thread_enter() {
+    if (my_tm_stats == 0) {
+        // push my stats onto the stack
+        my_tm_stats = aligned_alloc(256, sizeof(tm_stats_t)); //calloc(1,sizeof(tm_stats_t));
+        memset(my_tm_stats, 0, sizeof(tm_stats_t));
+        do {
+            my_tm_stats->next = master_tm_stats.next;
+        } while(!__sync_bool_compare_and_swap(&(master_tm_stats.next),my_tm_stats->next,my_tm_stats));
+    }
+}
+
 static void* _tl_dummy_thread_main(void *spec){
 
     // unwrap arguments
@@ -761,11 +772,7 @@ static void* _tl_dummy_thread_main(void *spec){
     void * args;
     void* ret;
 
-    // push my stats onto the stack
-    my_tm_stats = calloc(1,sizeof(tm_stats_t));
-    do{
-        my_tm_stats->next = master_tm_stats.next;
-    }while(!__sync_bool_compare_and_swap(&(master_tm_stats.next),my_tm_stats->next,my_tm_stats));
+    tl_thread_enter();
 
     // call the actual desired function
     ret = orig->routine(orig->args);
@@ -794,8 +801,8 @@ void _tl_pthread_exit(void *retval)
 __attribute__((destructor))
 static void uninit_lib_txlock()
 {
-    struct _tm_stats_t* volatile curr = &master_tm_stats;
-    do{
+    struct _tm_stats_t* volatile curr = master_tm_stats.next;
+    while (curr) {
         tm_stats.cycles += curr->cycles;
         tm_stats.tm_cycles += curr->tm_cycles;
         tm_stats.locks += curr->locks;
@@ -806,7 +813,7 @@ static void uninit_lib_txlock()
         tm_stats.conflicts += curr->conflicts;
         tm_stats.threads += 1;
         curr = curr->next;
-    }while(curr!=NULL);
+    }
 
 
     fprintf(stderr, "LIBTXLOCK_LOCK: %s", using_lock_type->name);
@@ -820,13 +827,13 @@ Ensure all threads properly terminate using pthread_exit()");
             tm_stats.threads);
     }
     if (tm_stats.locks!=0) {
-        fprintf(stderr, ", avg_lock_cycles: %d, locks: %d",
-                        (int)(tm_stats.cycles/tm_stats.locks), tm_stats.locks);
+        fprintf(stderr, ", avg_lock_cycles: %ld, locks: %d",
+                        (tm_stats.cycles/tm_stats.locks), tm_stats.locks);
     }
     if (tm_stats.tries!=0) {
-        fprintf(stderr, ", avg_tm_cycles: %d, tm_tries: %d, overflows: %d, conflicts: %d, stops: %d, commits: %d",
-                        (int)(tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries,
-                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops, tm_stats.commits);
+        fprintf(stderr, ", avg_tm_cycles: %ld, tm_tries: %d, commits: %d, overflows: %d, conflicts: %d, stops: %d",
+                        (tm_stats.tm_cycles/tm_stats.tries), tm_stats.tries, tm_stats.commits,
+                        tm_stats.overflows, tm_stats.conflicts, tm_stats.stops);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
