@@ -764,6 +764,10 @@ void tl_thread_enter() {
     }
 }
 
+int tl_in_spec() {
+    return HTM_IS_ACTIVE();
+}
+
 static void* _tl_dummy_thread_main(void *spec){
 
     // unwrap arguments
