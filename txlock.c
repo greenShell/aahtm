@@ -213,7 +213,10 @@ static int tas_priority_lock_tm(tas_lock_t *lk) {
 			if(tmp >= TK_MAX_DISTANCE-TK_MIN_DISTANCE){
 				__sync_fetch_and_add(&lk->cnt,-1);
 			}
-            else if(enter_htm(lk)==0){return 0;}
+            else if(enter_htm(lk)==0){
+				if(lk->val!=1){HTM_ABORT(1);}
+				return 0;
+			}
 			else{
 				__sync_fetch_and_add(&lk->cnt,-1);
 				__sync_fetch_and_add(&lk->ready,1);
@@ -306,7 +309,10 @@ static int ticket_lock_tm(ticket_lock_t *l) {
         uint32_t dist = my_ticket - l->now;
         if (dist <= TK_MAX_DISTANCE && dist >= TK_MIN_DISTANCE && tries < TK_NUM_TRIES) {
             // if lock is held, start speculating
-            if(enter_htm(l)==0){return 0;}
+            if(enter_htm(l)==0){
+				if(l->now==my_ticket){HTM_ABORT(1);}				
+				return 0;
+			}
             else{
                 spin_wait(8);
                 tries++;
