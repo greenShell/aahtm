@@ -110,7 +110,7 @@ static int tas_lock_hle(tas_lock_t *l) {
   int tries = 0;
   int s = spin_begin();
 
-  while (enter_htm(l)) {
+  while (enter_htm(0)) {
     tries++;
 
     if(tries>=TK_NUM_TRIES){
@@ -776,7 +776,7 @@ void tl_thread_enter() {
 }
 
 int tl_in_spec() {
-    return HTM_IS_ACTIVE();
+    return HTM_IS_ACTIVE() && spec_entry;
 }
 
 static void* _tl_dummy_thread_main(void *spec){
