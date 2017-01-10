@@ -1,10 +1,8 @@
 #include "txlock.h"
 #include <stdio.h>
 
-// internal handlers, shoud never be called inside a user app
+// internal handlers, should never be called inside a user app
 int _tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *arg);
-void _tl_pthread_exit(void *retval);
-
 
 int pthread_mutex_lock(void *mutex) {
     return tl_lock(mutex);
@@ -38,8 +36,3 @@ int pthread_cond_wait(void *cond, void *mutex) {
 int pthread_create(void *thread, const void *attr, void *(*start_routine) (void *), void *arg) {
     return _tl_pthread_create(thread, attr, start_routine, arg);
 }
-
-void pthread_exit(void *retval) {
-    _tl_pthread_exit(retval);
-}
-

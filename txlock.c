@@ -202,30 +202,57 @@ static int tas_priority_lock_tm(tas_lock_t *lk) {
     tas_lock_t copy;
     int s = spin_begin();
     while(true){
-        copy.all = lk->all;
-        if(copy.ready==0){
-            if (!tatas(&lk->val, 1)) {
-                break;
-            }
-        }
-        if(copy.cnt < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
-            int tmp = __sync_fetch_and_add(&lk->cnt,1);
-			if(tmp >= TK_MAX_DISTANCE-TK_MIN_DISTANCE){
-				__sync_fetch_and_add(&lk->cnt,-1);
+			copy.all = lk->all;
+			if(copy.ready==0){
+					if (!tatas(&lk->val, 1)) {
+							break;
+					}
 			}
-            else if(enter_htm(lk)==0){
-				if(lk->val!=1){HTM_ABORT(1);}
-				return 0;
+			if(copy.ready < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
+				if(enter_htm(lk)==0){
+					//if(lk->val!=1){HTM_ABORT(1);}
+					return 0;
+				}
+				else{
+					__sync_fetch_and_add(&lk->ready,1);
+					while (tatas(&lk->val, 1)){}
+					__sync_fetch_and_add(&lk->ready,-1);
+					break;
+				}
 			}
-			else{
-				__sync_fetch_and_add(&lk->cnt,-1);
-				__sync_fetch_and_add(&lk->ready,1);
-				while (tatas(&lk->val, 1)){}
-				__sync_fetch_and_add(&lk->ready,-1);
-				break;
-			}
-        }
-        s = spin_wait(s);
+			/*
+			if(copy.cnt < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
+				bool tmp = __sync_bool_compare_and_swap(&lk->cnt,copy.cnt,copy.cnt+1);
+				//if(tmp == 0){}
+				//else 
+					if(enter_htm(lk)==0){
+					//if(lk->val!=1){HTM_ABORT(1);}
+					return 0;
+				}
+				else{
+					//__sync_fetch_and_add(&lk->cnt,-1);
+					__sync_fetch_and_add(&lk->ready,1);
+					s = spin_begin();
+					while (tatas(&lk->val, 1)){s = spin_wait(s);}
+					__sync_fetch_and_add(&lk->ready,-1);
+					break;
+				}
+			}*/
+			/*
+			if(copy.cnt < TK_MAX_DISTANCE-TK_MIN_DISTANCE){
+				lk->cnt=1;
+				if(enter_htm(lk)==0){
+					return 0;
+				}
+				else{
+					lk->ready=1;
+					lk->cnt=0;
+					while (tatas(&lk->val, 1)){if(lk->ready!=1){lk->ready=1;}}
+					lk->ready=0;
+					break;
+				}
+			}*/
+			s = spin_wait(s);
     }
   }
   TM_STATS_SUB(my_tm_stats->cycles, rdtsc());
@@ -724,6 +751,10 @@ __attribute__((constructor(201)))  // after tl-pthread.so
 static void init_lib_txlock() {
     setup_pthread_funcs();
 
+		tm_stats_head = aligned_alloc(256, sizeof(tm_stats_t)); //calloc(1,sizeof(tm_stats_t));
+		memset(tm_stats_head, 0, sizeof(tm_stats_t));
+		my_tm_stats = tm_stats_head;
+		
     // determine lock type
     const char *type = getenv("LIBTXLOCK_LOCK");
     if (type) {
@@ -804,12 +835,6 @@ int _tl_pthread_create(void *thread, const void *attr, void *(*start_routine) (v
     orig->routine = start_routine;
     orig->args = args;
     return libpthread_create(thread,attr,&_tl_dummy_thread_main,orig);
-}
-
-
-void _tl_pthread_exit(void *retval)
-{
-    libpthread_exit(retval);
 }
 
 

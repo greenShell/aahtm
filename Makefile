@@ -13,7 +13,7 @@ libtxlock.a: txlock.o txcond.o txutil.o pthread_cond.o
 	gcc-ar rcs $@ $^
 
 tl-pthread.so: tl-pthread.s.o txlock.s.o txcond.s.o txutil.s.o pthread_cond.s.o
-	gcc -flto -shared $^ -ldl -o $@
+	gcc -g -flto -shared $^ -ldl -o $@
 
 %.s.o: %.c txlock.h txutil.h txcond.h
 	gcc $(CFLAGS) -fPIC -flto -c $< -o $@
