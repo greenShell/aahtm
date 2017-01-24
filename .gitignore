@@ -6,7 +6,20 @@
 *.out
 *~
 *.gcno
+*.d
 test
+
+bench/uts-1.1/config.in
+bench/uts-1.1/uts-pthread
+
+bench/memcached-1.4.5/.deps/
+bench/memcached-1.4.5/memcached
+bench/memcached-1.4.5/memcached-debug
+bench/memcached-1.4.5/results/
+bench/memcached-1.4.5/sizes
+bench/memcached-1.4.5/testapp
+bench/memcached-1.4.5/timedrun
+
 
 bench/memcached-1.4.25/doc/Makefile
 bench/memcached-1.4.25/.deps
@@ -347,3 +360,5 @@ bench/libmemcached-1.0.18/tests/testhashkit
 bench/libmemcached-1.0.18/tests/testplus
 bench/libmemcached-1.0.18/tests/testudp
 
+bench/simple-mutex/bin/*
+bench/simple-mutex/obj/*
