@@ -8,7 +8,10 @@
 *.gcno
 *.d
 test
+*.Rhistory
 
+
+bench/condtest/bin/*
 bench/uts-1.1/config.in
 bench/uts-1.1/uts-pthread
 
