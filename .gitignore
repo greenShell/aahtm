@@ -9,13 +9,22 @@
 *.d
 test
 *.Rhistory
-
+*.ods#
 
 bench/NPB3.0-RUB/results/*
 bench/stamp-0.9.10/results/*
 bench/condtest/bin/*
 bench/uts-1.1/config.in
 bench/uts-1.1/uts-pthread
+
+bench/stamp-0.9.10/genome/genome
+bench/stamp-0.9.10/intruder/intruder
+bench/stamp-0.9.10/kmeans/kmeans
+bench/stamp-0.9.10/labyrinth/labyrinth
+bench/stamp-0.9.10/ssca2/ssca2
+bench/stamp-0.9.10/vacation/vacation
+bench/stamp-0.9.10/yada/yada
+bench/stamp-0.9.10/bayes/bayes
 
 bench/memcached-1.4.5/.deps/
 bench/memcached-1.4.5/memcached
