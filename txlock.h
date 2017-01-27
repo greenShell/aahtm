@@ -19,6 +19,7 @@ typedef struct _txlock_t txlock_t;
 
 void tl_thread_enter();
 int tl_in_spec();
+void tl_stop_spec();
 
 int tl_lock(txlock_t *l);
 int tl_trylock(txlock_t *l);
