@@ -123,7 +123,7 @@ static int tas_lock_hle(tas_lock_t *l) {
   }
 
   // locked by other thread, waiting for abort
-  if (HTM_IS_ACTIVE() && l->val) {
+  if (HTM_IS_ACTIVE() && (l->val==1)) {
     while (1)
      spin_wait(spin_begin());
   }
