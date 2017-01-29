@@ -810,6 +810,10 @@ int tl_in_spec() {
     return HTM_IS_ACTIVE() && spec_entry;
 }
 
+void tl_stop_spec() {
+    HTM_ABORT(7);
+}
+
 static void* _tl_dummy_thread_main(void *spec){
 
     // unwrap arguments

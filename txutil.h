@@ -20,8 +20,9 @@
     #define HTM_END()           _xend()
     #define HTM_ABORT(c)        _xabort(c)
     #define HTM_SUCCESSFUL      _XBEGIN_STARTED
-    #define HTM_IS_CONFLICT(c)  ((c) & _XABORT_CONFLICT)
-    #define HTM_IS_OVERFLOW(c)  ((c) & _XABORT_CAPACITY)
+    #define HTM_ABORT_CONFLICT(c)  ((c) & _XABORT_CONFLICT)
+    #define HTM_ABORT_OVERFLOW(c)  ((c) & _XABORT_CAPACITY)
+    #define HTM_ABORT_EXPLICIT(c)  ((c) & _XABORT_EXPLICIT)
     #define HTM_IS_ACTIVE()     _xtest()
 
     inline uint64_t rdtsc() { return __rdtsc(); }
@@ -36,8 +37,8 @@
     #define HTM_SUSPEND()       __builtin_tsuspend()
     #define HTM_RESUME()        __builtin_tresume()
     // TODO:
-    //#define HTM_IS_CONFLICT(c)
-    //#define HTM_IS_OVERFLOW(c)
+    //#define HTM_ABORT_CONFLICT(c)
+    //#define HTM_ABORT_OVERFLOW(c)
     //rdtsc
 #else
     #error "unsupported CPU"
@@ -138,12 +139,12 @@ int inline enter_htm(void* primitive){
     }
     // abort
     TM_STATS_ADD(my_tm_stats->tm_cycles, RDTSC());
-    if (HTM_IS_CONFLICT(ret))
+    if (HTM_ABORT_CONFLICT(ret))
         TM_STATS_ADD(my_tm_stats->conflicts, 1);
-    else if (HTM_IS_OVERFLOW(ret))
+    else if (HTM_ABORT_OVERFLOW(ret))
         TM_STATS_ADD(my_tm_stats->overflows, 1);
-    else // self aborts
-        ;
+    else if (HTM_ABORT_EXPLICIT(ret) && _XABORT_CODE(ret)==7)// self aborts
+        TM_STATS_ADD(my_tm_stats->stops, 1);
     spec_entry = 0;
     return 1;
 }
