@@ -63,8 +63,8 @@ extern tm_stats_t* tm_stats_head;      // master thread's local state
 extern __thread tm_stats_t* my_tm_stats; // thread-local stats
 extern tm_stats_t tm_stats;             // global stats, updated only when a thread exits
 
-#define TM_NO_PROFILING
-#define TM_PROFILE_RDTSC
+//#define TM_NO_PROFILING
+//#define TM_PROFILE_RDTSC
 
 #ifdef TM_NO_PROFILING
 #define TM_STATS_ADD(stat, value)
