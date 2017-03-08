@@ -17,6 +17,13 @@ bench/condtest/bin/*
 bench/uts-1.1/config.in
 bench/uts-1.1/uts-pthread
 
+
+bench/NPB3.3.1/NPB3.3-MPI/bin/*
+bench/NPB3.3.1/NPB3.3-MPI/*/npbparams.h
+bench/NPB3.3.1/NPB3.3-MPI/mpiexec
+bench/NPB3.3.1/NPB3.3-MPI/sys/setparams
+
+
 bench/stamp-0.9.10/genome/genome
 bench/stamp-0.9.10/intruder/intruder
 bench/stamp-0.9.10/kmeans/kmeans
@@ -34,7 +41,9 @@ bench/memcached-1.4.5/sizes
 bench/memcached-1.4.5/testapp
 bench/memcached-1.4.5/timedrun
 
-
+bench/memcached-1.4.25/Makefile.in
+bench/memcached-1.4.25/aclocal.m4
+bench/memcached-1.4.25/doc/Makefile.in
 bench/memcached-1.4.25/doc/Makefile
 bench/memcached-1.4.25/.deps
 bench/memcached-1.4.25/Makefile
